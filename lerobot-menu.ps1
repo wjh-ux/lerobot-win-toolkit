@@ -1,0 +1,652 @@
+﻿<#
+.SYNOPSIS
+    LeRobot 交互式工具箱：敲数字或字母就能跑对应命令。
+
+.DESCRIPTION
+    把 lerobot 的全部命令 + 安装/自检包成一个菜单。不需要 conda activate，
+    脚本自己定位环境里的 exe。
+
+    支持两种用法：
+      1) 菜单模式：直接运行，按提示敲数字/字母
+      2) 直达模式：把编号或字母当参数传进去，例如
+             .\lerobot-menu.ps1 4          标定
+             .\lerobot-menu.ps1 c          相机检测
+
+.PARAMETER Item
+    可选。菜单编号（0-9）或字母（c/v/i/m/h/q）。给了就直接执行那一项。
+
+.PARAMETER EnvName
+    conda 环境名，默认 lerobot。
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1 5
+#>
+[CmdletBinding()]
+param(
+    [string]$Item = '',
+    [string]$EnvName = 'lerobot'
+)
+
+$ErrorActionPreference = 'Continue'
+$env:PYTHONNOUSERSITE = '1'
+
+$script:PyExe     = $null
+$script:EnvPrefix = $null
+$script:ScriptsDir = $null
+$script:LastCode = 0
+
+# ============================================================ 基础工具
+function Find-Conda {
+    $c = Get-Command conda.exe -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    $cands = @(
+        (Join-Path $HOME 'miniconda3\Scripts\conda.exe'),
+        (Join-Path $HOME 'miniforge3\Scripts\conda.exe'),
+        (Join-Path $HOME 'anaconda3\Scripts\conda.exe'),
+        (Join-Path $env:LOCALAPPDATA 'miniconda3\Scripts\conda.exe'),
+        (Join-Path $env:LOCALAPPDATA 'miniforge3\Scripts\conda.exe'),
+        (Join-Path $env:ProgramData 'miniconda3\Scripts\conda.exe'),
+        (Join-Path $env:ProgramData 'Anaconda3\Scripts\conda.exe')
+    )
+    foreach ($p in $cands) { if ($p -and (Test-Path -LiteralPath $p)) { return $p } }
+    return $null
+}
+
+function Get-EnvPrefix([string]$name) {
+    $conda = Find-Conda
+    if (-not $conda) { return $null }
+    $raw = & $conda env list --json 2>$null | Out-String
+    $start = $raw.IndexOf('{')
+    if ($start -lt 0) { return $null }
+    try { $obj = $raw.Substring($start) | ConvertFrom-Json } catch { return $null }
+    foreach ($p in $obj.envs) {
+        if ((Split-Path -Leaf $p) -eq $name) { return $p }
+    }
+    return $null
+}
+
+function Invoke-Py {
+    <#  写临时 .py 再执行：避免 PS 5.1 吞掉 -c 字符串里的双引号  #>
+    param([string]$Code)
+    $tmp = Join-Path $env:TEMP ('lr-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.py')
+    try {
+        [System.IO.File]::WriteAllText($tmp, $Code, (New-Object System.Text.UTF8Encoding($false)))
+        $out = & $script:PyExe $tmp 2>&1
+        return @{ Out = ($out | Out-String).Trim(); Code = $LASTEXITCODE }
+    } catch {
+        return @{ Out = $_.Exception.Message; Code = 1 }
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Read-Key([string]$Prompt = '请选择') {
+    Write-Host ''
+    Write-Host ("  $Prompt：" ) -NoNewline -ForegroundColor Yellow
+    return (Read-Host).Trim().ToLower()
+}
+
+function Read-Text([string]$Prompt, [string]$Default = '') {
+    if ($Default) {
+        Write-Host ("  $Prompt [回车=$Default]：") -NoNewline -ForegroundColor Yellow
+    } else {
+        Write-Host ("  $Prompt：") -NoNewline -ForegroundColor Yellow
+    }
+    $v = (Read-Host).Trim()
+    if (-not $v) { return $Default }
+    return $v
+}
+
+function Pause-Menu {
+    Write-Host ''
+    Write-Host '  按回车返回菜单...' -ForegroundColor DarkGray
+    $null = Read-Host
+}
+function Assert-Env {
+    <#  动作前统一检查环境是否就绪；没装就给出明确指引  #>
+    if ($script:EnvPrefix -and $script:PyExe -and (Test-Path -LiteralPath $script:PyExe)) { return $true }
+    Write-Host ''
+    Write-Host "  找不到 conda 环境 [$EnvName]。" -ForegroundColor Red
+    Write-Host '  请先选 [0] 安装；如果环境名不是 lerobot，用 -EnvName 指定' -ForegroundColor Gray
+    Write-Host '  例如： .\lerobot-menu.ps1 -EnvName my_env' -ForegroundColor Gray
+    return $false
+}
+
+# ============================================================ 串口
+function Get-SerialPorts {
+    $r = Invoke-Py @'
+import serial.tools.list_ports as lp
+ps = list(lp.comports())
+if not ps:
+    print("NONE")
+else:
+    for p in ps:
+        print("PORT:" + str(p.device) + "|" + str(p.description))
+'@
+    $ports = @()
+    foreach ($line in ("$($r.Out)" -split "`r?`n")) {
+        $m = [regex]::Match($line, 'PORT:([^|]+)\|(.*)')
+        if ($m.Success) {
+            $ports += [pscustomobject]@{
+                Device = $m.Groups[1].Value.Trim()
+                Desc   = $m.Groups[2].Value.Trim()
+            }
+        }
+    }
+    return $ports
+}
+
+function Select-SerialPort([string]$Title = '选择串口') {
+    $ports = Get-SerialPorts
+    if ($ports.Count -eq 0) {
+        Write-Host '  没检测到串口。' -ForegroundColor Yellow
+        Write-Host '  检查：USB 线插好了吗？舵机电源开了吗？驱动装了吗？' -ForegroundColor Gray
+        return (Read-Text "$Title（可手动输入，例如 COM3）")
+    }
+    Write-Host ''
+    Write-Host "  检测到 $($ports.Count) 个串口：" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $ports.Count; $i++) {
+        Write-Host ("    [{0}] {1,-8} {2}" -f ($i + 1), $ports[$i].Device, $ports[$i].Desc) -ForegroundColor White
+    }
+    $sel = Read-Text "$Title（输入编号，直接回车=第 1 个）" '1'
+    $idx = 0
+    if ([int]::TryParse($sel, [ref]$idx) -and $idx -ge 1 -and $idx -le $ports.Count) {
+        return $ports[$idx - 1].Device
+    }
+    # 用户直接输了 COM3 这种
+    if ($sel -match '^COM\d+$') { return $sel }
+    return $ports[0].Device
+}
+
+# ============================================================ 机型
+function Select-RobotType([switch]$ForTeleop) {
+    $items = @(
+        @{ Key = '1'; Type = 'so101_follower'; Name = 'SO-101 从臂（最常见）' }
+        @{ Key = '2'; Type = 'so101_leader';   Name = 'SO-101 主臂' }
+        @{ Key = '3'; Type = 'so100_follower'; Name = 'SO-100 从臂' }
+        @{ Key = '4'; Type = 'so100_leader';   Name = 'SO-100 主臂' }
+    )
+    if ($ForTeleop) {
+        $items = @(
+            @{ Key = '1'; Type = 'so101_leader';   Name = 'SO-101 主臂（最常见）' }
+            @{ Key = '2'; Type = 'so100_leader';   Name = 'SO-100 主臂' }
+            @{ Key = '3'; Type = 'gamepad';        Name = '手柄' }
+            @{ Key = '4'; Type = 'keyboard';       Name = '键盘' }
+        )
+    }
+    Write-Host ''
+    Write-Host '  设备类型：' -ForegroundColor Cyan
+    foreach ($it in $items) {
+        Write-Host ("    [{0}] {1,-16} {2}" -f $it.Key, $it.Type, $it.Name) -ForegroundColor White
+    }
+    $sel = Read-Text '选择' '1'
+    foreach ($it in $items) { if ($it.Key -eq $sel) { return $it.Type } }
+    return $items[0].Type
+}
+
+# ============================================================ 执行
+function Invoke-Lerobot {
+    param([string]$Cmd, [string[]]$ArgList = @())
+    $exe = Join-Path $script:ScriptsDir ($Cmd + '.exe')
+    if (-not (Test-Path -LiteralPath $exe)) {
+        Write-Host "  找不到命令 $Cmd" -ForegroundColor Red
+        Write-Host "  环境 $EnvName 里没装它，先跑 [0] 安装或 1 自检看看" -ForegroundColor Gray
+        return
+    }
+    Write-Host ''
+    Write-Host ('  执行：' + $Cmd + ' ' + ($ArgList -join ' ')) -ForegroundColor DarkCyan
+    Write-Host ('  ' + ('-' * 68)) -ForegroundColor DarkGray
+    & $exe @ArgList
+    $code = $LASTEXITCODE
+    Write-Host ('  ' + ('-' * 68)) -ForegroundColor DarkGray
+    $script:LastCode = $code
+    if ($code -eq 0) { Write-Host '  命令正常结束' -ForegroundColor Green }
+    else { Write-Host "  命令退出码 $code（0 才是正常）" -ForegroundColor Yellow }
+}
+
+function Get-CalibrationList {
+    $dir = Join-Path $HOME '.cache\huggingface\lerobot\calibration'
+    if (-not (Test-Path $dir)) { return @() }
+    return @(Get-ChildItem $dir -Recurse -Filter *.json -ErrorAction SilentlyContinue |
+             ForEach-Object { $_.BaseName } | Select-Object -Unique)
+}
+
+function Select-RobotId([string]$Kind = 'robot', [string]$Default = '') {
+    $existing = Get-CalibrationList
+    if ($existing.Count -gt 0) {
+        Write-Host ''
+        Write-Host '  已有标定的 id：' -ForegroundColor Cyan
+        for ($i = 0; $i -lt $existing.Count; $i++) {
+            Write-Host ("    [{0}] {1}" -f ($i + 1), $existing[$i]) -ForegroundColor White
+        }
+        $sel = Read-Text '选择已有 id，或直接输入新名字' '1'
+        $idx = 0
+        if ([int]::TryParse($sel, [ref]$idx) -and $idx -ge 1 -and $idx -le $existing.Count) {
+            return $existing[$idx - 1]
+        }
+        if ($sel) { return $sel }
+    }
+    if (-not $Default) {
+        if ($Kind -eq 'teleop') { $Default = 'my_leader_arm' } else { $Default = 'my_follower_arm' }
+    }
+    return (Read-Text "给这个$Kind 起个名字" $Default)
+}
+
+# ============================================================ 菜单
+function Show-Menu {
+    Clear-Host
+    Write-Host ''
+    Write-Host '  ================================================================' -ForegroundColor Cyan
+    Write-Host '            LeRobot 工具箱 - 敲数字或字母即可' -ForegroundColor Cyan
+    Write-Host '  ================================================================' -ForegroundColor Cyan
+
+    if ($script:EnvPrefix) {
+        Write-Host "  环境：$EnvName  ->  $($script:EnvPrefix)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  环境：$EnvName  ->  未安装（请先选 0）" -ForegroundColor Red
+    }
+    Write-Host ''
+    Write-Host '   环境' -ForegroundColor DarkGray
+    Write-Host '    [0] 安装 / 修复环境       install-lerobot.ps1' -ForegroundColor White
+    Write-Host '    [1] 软件环境自检          test-lerobot.ps1' -ForegroundColor White
+    Write-Host '    [w] 硬件检查（串口/相机/标定）' -ForegroundColor White
+    Write-Host ''
+    Write-Host '   机械臂准备（按顺序做一次）' -ForegroundColor DarkGray
+    Write-Host '    [2] 查找串口              lerobot-find-port' -ForegroundColor White
+    Write-Host '    [3] 设置电机 ID           lerobot-setup-motors' -ForegroundColor White
+    Write-Host '    [4] 标定机械臂            lerobot-calibrate' -ForegroundColor White
+    Write-Host ''
+    Write-Host '   日常使用' -ForegroundColor DarkGray
+    Write-Host '    [5] 遥操作                lerobot-teleoperate' -ForegroundColor White
+    Write-Host '    [6] 录制数据集            lerobot-record' -ForegroundColor White
+    Write-Host '    [7] 训练策略              lerobot-train' -ForegroundColor White
+    Write-Host '    [8] 推理 / 跑策略         lerobot-rollout' -ForegroundColor White
+    Write-Host '    [9] 回放数据集            lerobot-replay' -ForegroundColor White
+    Write-Host ''
+    Write-Host '   其他' -ForegroundColor DarkGray
+    Write-Host '    [c] 相机检测              lerobot-find-cameras' -ForegroundColor White
+    Write-Host '    [v] 数据集可视化          lerobot-dataset-viz' -ForegroundColor White
+    Write-Host '    [i] 环境详情 / 标定文件' -ForegroundColor White
+    Write-Host '    [m] 设置 HuggingFace 镜像' -ForegroundColor White
+    Write-Host '    [h] 命令速查              [q] 退出' -ForegroundColor White
+    Write-Host ''
+}
+
+# ============================================================ 各项动作
+function Action-Install {
+    $here = $PSScriptRoot
+    $inst = Join-Path $here 'install-lerobot.ps1'
+    if (-not (Test-Path $inst)) {
+        Write-Host "  找不到 $inst" -ForegroundColor Red
+        Write-Host '  请把 install-lerobot.ps1 和本脚本放在同一目录' -ForegroundColor Gray
+        return
+    }
+    Write-Host ''
+    Write-Host '  安装会用 -FromPypi -AutoInstallPrereqs -WithGit（不依赖 GitHub）' -ForegroundColor Gray
+    $ok = Read-Key '确认开始？(y/n)'
+    if ($ok -ne 'y') { Write-Host '  已取消' -ForegroundColor Gray; return }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $inst -FromPypi -AutoInstallPrereqs -WithGit
+    $script:EnvPrefix = Get-EnvPrefix $EnvName
+    if ($script:EnvPrefix) { $script:PyExe = Join-Path $script:EnvPrefix 'python.exe'; $script:ScriptsDir = Join-Path $script:EnvPrefix 'Scripts' }
+}
+
+function Action-Test {
+    $here = $PSScriptRoot
+    $t = Join-Path $here 'test-lerobot.ps1'
+    if (-not (Test-Path $t)) { Write-Host "  找不到 $t" -ForegroundColor Red; return }
+    Write-Host ''
+    Write-Host '  正在检查软件环境（约 5-15 秒）...' -ForegroundColor Yellow
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $t -EnvName $EnvName
+}
+
+function Action-HardwareCheck {
+    $here = $PSScriptRoot
+    $t = Join-Path $here 'test-lerobot.ps1'
+    if (-not (Test-Path $t)) { Write-Host "  找不到 $t" -ForegroundColor Red; return }
+    Write-Host ''
+    Write-Host '  检查硬件：串口 / 标定文件 / 相机' -ForegroundColor Yellow
+    Write-Host '  没接机械臂或摄像头时这些项会是 WARN，属正常。' -ForegroundColor Gray
+    Write-Host '  相机探测最多等 25 秒，不会卡死。' -ForegroundColor Gray
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $t -EnvName $EnvName -Hardware
+}
+
+function Action-FindPort {
+    if (-not (Assert-Env)) { return }
+    Invoke-Lerobot 'lerobot-find-port'
+}
+
+function Action-SetupMotors {
+    if (-not (Assert-Env)) { return }
+    $isTeleop = (Read-Key '这是主臂(leader)吗？(y=主臂 / n=从臂)') -eq 'y'
+    $type = Select-RobotType -ForTeleop:$isTeleop
+    $port = Select-SerialPort '接哪个串口'
+    $side = 'robot'
+    if ($isTeleop) { $side = 'teleop' }
+    Invoke-Lerobot 'lerobot-setup-motors' @("--$side.type=$type", "--$side.port=$port")
+}
+
+function Action-Calibrate {
+    if (-not (Assert-Env)) { return }
+    $isTeleop = (Read-Key '标定主臂(leader)？(y=主臂 / n=从臂)') -eq 'y'
+    $type = Select-RobotType -ForTeleop:$isTeleop
+    $port = Select-SerialPort '接哪个串口'
+    $side = 'robot'
+    if ($isTeleop) { $side = 'teleop' }
+    $id = Select-RobotId -Kind $side
+    Write-Host ''
+    Write-Host '  标定步骤：1) 把各关节摆到行程中间 2) 回车 3) 每个关节走完整行程' -ForegroundColor Yellow
+    Invoke-Lerobot 'lerobot-calibrate' @("--$side.type=$type", "--$side.port=$port", "--$side.id=$id")
+}
+
+function Action-Teleoperate {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    $fType = Select-RobotType
+    $fPort = Select-SerialPort '从臂串口'
+    $fId = Select-RobotId -Kind 'robot' -Default 'my_follower_arm'
+    $lType = Select-RobotType -ForTeleop
+    $lPort = Select-SerialPort '主臂串口'
+    $lId = Select-RobotId -Kind 'teleop' -Default 'my_leader_arm'
+    $args = @(
+        "--robot.type=$fType", "--robot.port=$fPort", "--robot.id=$fId",
+        "--teleop.type=$lType", "--teleop.port=$lPort", "--teleop.id=$lId"
+    )
+    $show = Read-Key '要显示画面吗？(y/n)'
+    if ($show -eq 'y') { $args += '--display_data=true' }
+    Invoke-Lerobot 'lerobot-teleoperate' $args
+}
+
+function Action-Record {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    $fType = Select-RobotType
+    $fPort = Select-SerialPort '从臂串口'
+    $fId = Select-RobotId -Kind 'robot' -Default 'my_follower_arm'
+    $lType = Select-RobotType -ForTeleop
+    $lPort = Select-SerialPort '主臂串口'
+    $lId = Select-RobotId -Kind 'teleop' -Default 'my_leader_arm'
+
+    $user = $env:HF_USER
+    if (-not $user) { $user = Read-Text '你的 HuggingFace 用户名（HF_USER）' '' }
+    if (-not $user) { Write-Host '  没有用户名，数据集没法命名' -ForegroundColor Red; return }
+
+    $task = Read-Text '任务描述（例如: put the red brick in a bowl）' 'put the red brick in a bowl'
+    $name = Read-Text '数据集名字' 'so101_dataset'
+    $eps = Read-Text '录几回合' '30'
+
+    $args = @(
+        "--robot.type=$fType", "--robot.port=$fPort", "--robot.id=$fId",
+        "--teleop.type=$lType", "--teleop.port=$lPort", "--teleop.id=$lId",
+        "--dataset.repo_id=$user/$name",
+        "--dataset.num_episodes=$eps",
+        "--dataset.single_task=$task",
+        '--dataset.streaming_encoding=true',
+        '--display_data=true'
+    )
+
+    $withCam = Read-Key '接摄像头了吗？(y/n)'
+    if ($withCam -eq 'y') {
+        $top = Read-Text '环境相机编号（通常 0 或 1）' '1'
+        $wrist = Read-Text '腕部相机编号' '0'
+        $cam = '{ top: {type: opencv, index_or_path: ' + $top + ', width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: ' + $wrist + ', width: 640, height: 480, fps: 30} }'
+        $args += "--robot.cameras=$cam"
+    }
+
+    Write-Host ''
+    Write-Host '  录制中的键盘操作：' -ForegroundColor Yellow
+    Write-Host '    右方向键 / n  = 保存这一回合，录下一回合' -ForegroundColor Gray
+    Write-Host '    左方向键 / r  = 丢掉这一回合重录' -ForegroundColor Gray
+    Write-Host '    ESC / q       = 结束并上传' -ForegroundColor Gray
+    Invoke-Lerobot 'lerobot-record' $args
+}
+
+function Action-Train {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    $user = $env:HF_USER
+    if (-not $user) { $user = Read-Text '你的 HuggingFace 用户名（HF_USER）' '' }
+    $ds = Read-Text '数据集 repo_id（用户名/数据集名）' "$user/so101_dataset"
+    Write-Host ''
+    Write-Host '  策略类型：' -ForegroundColor Cyan
+    Write-Host '    [1] act        （入门首选，小数据也能跑）' -ForegroundColor White
+    Write-Host '    [2] diffusion' -ForegroundColor White
+    Write-Host '    [3] smolvla' -ForegroundColor White
+    Write-Host '    [4] pi0' -ForegroundColor White
+    Write-Host '    [5] pi05' -ForegroundColor White
+    $sel = Read-Text '选择' '1'
+    $pol = 'act'
+    switch ($sel) {
+        '2' { $pol = 'diffusion' }
+        '3' { $pol = 'smolvla' }
+        '4' { $pol = 'pi0' }
+        '5' { $pol = 'pi05' }
+    }
+    $steps = Read-Text '训练步数' '20000'
+    $dev = Read-Text '设备（cuda / cpu）' 'cuda'
+    $tag = Read-Text '本次训练的名字' ("${pol}_so101")
+    $args = @(
+        "--dataset.repo_id=$ds",
+        "--policy.type=$pol",
+        "--policy.device=$dev",
+        "--policy.repo_id=$user/$tag",
+        "--output_dir=outputs/train/$tag",
+        "--job_name=$tag",
+        "--steps=$steps"
+    )
+    Invoke-Lerobot 'lerobot-train' $args
+}
+
+function Action-Rollout {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    $policy = Read-Text '策略路径或 repo_id（例如 你的用户名/policy_test）' ''
+    if (-not $policy) { Write-Host '  需要先有训练好的策略' -ForegroundColor Red; return }
+    $fType = Select-RobotType
+    $fPort = Select-SerialPort '从臂串口'
+    $fId = Select-RobotId -Kind 'robot' -Default 'my_follower_arm'
+    $task = Read-Text '任务描述（要和录制时一致）' 'put the red brick in a bowl'
+    $dur = Read-Text '跑多少秒' '60'
+    $args = @(
+        '--strategy.type=base',
+        "--policy.path=$policy",
+        "--robot.type=$fType", "--robot.port=$fPort", "--robot.id=$fId",
+        "--task=$task", "--duration=$dur"
+    )
+    $exe = Join-Path $script:ScriptsDir 'lerobot-rollout.exe'
+    if (-not (Test-Path -LiteralPath $exe)) {
+        Write-Host ''
+        Write-Host '  lerobot-rollout 不存在（0.5.x 及更早没有这个命令）' -ForegroundColor Yellow
+        Write-Host '  改用 lerobot-record 做推理，参数格式不同，请参考文档' -ForegroundColor Gray
+        return
+    }
+    Invoke-Lerobot 'lerobot-rollout' $args
+}
+
+function Action-Replay {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    $user = $env:HF_USER
+    if (-not $user) { $user = Read-Text '你的 HuggingFace 用户名（HF_USER）' '' }
+    $ds = Read-Text '数据集 repo_id' "$user/so101_dataset"
+    $ep = Read-Text '回放第几回合（从 0 开始）' '0'
+    $fType = Select-RobotType
+    $fPort = Select-SerialPort '从臂串口'
+    $fId = Select-RobotId -Kind 'robot' -Default 'my_follower_arm'
+    Invoke-Lerobot 'lerobot-replay' @(
+        "--dataset.repo_id=$ds", "--dataset.episode=$ep",
+        "--robot.type=$fType", "--robot.port=$fPort", "--robot.id=$fId"
+    )
+}
+
+function Action-Cameras {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    Write-Host '  会打开本机摄像头预览并报出编号' -ForegroundColor Gray
+    $exe = Join-Path $script:ScriptsDir 'lerobot-find-cameras.exe'
+    if (Test-Path -LiteralPath $exe) {
+        & $exe opencv
+    } else {
+        Write-Host '  找不到 lerobot-find-cameras' -ForegroundColor Red
+    }
+}
+
+function Action-Viz {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    $user = $env:HF_USER
+    if (-not $user) { $user = Read-Text '你的 HuggingFace 用户名（HF_USER）' '' }
+    $ds = Read-Text '数据集 repo_id' "$user/so101_dataset"
+    $ep = Read-Text '看第几回合' '0'
+    Invoke-Lerobot 'lerobot-dataset-viz' @("--repo-id=$ds", "--episode-index=$ep")
+}
+
+function Action-Info {
+    if (-not (Assert-Env)) { return }
+    Write-Host ''
+    Write-Host '  === 环境 ===' -ForegroundColor Cyan
+    Write-Host "    Python : $(& $script:PyExe --version 2>&1)"
+    $lv = Invoke-Py 'import lerobot;print(lerobot.__version__)'
+    Write-Host "    lerobot: $($lv.Out)"
+    Write-Host "    路径   : $($script:EnvPrefix)"
+    Write-Host ''
+    Write-Host '  === 关键包 ===' -ForegroundColor Cyan
+    $pk = Invoke-Py @'
+import importlib.metadata as md
+for n in ["torch","torchvision","numpy","opencv-python-headless","feetech-servo-sdk","datasets","accelerate"]:
+    try:
+        print("    %-24s %s" % (n, md.version(n)))
+    except Exception:
+        print("    %-24s (未安装)" % n)
+'@
+    Write-Host $pk.Out
+    Write-Host ''
+    Write-Host '  === 标定文件 ===' -ForegroundColor Cyan
+    $cals = Get-CalibrationList
+    if ($cals.Count -eq 0) {
+        Write-Host '    （还没有，跑 [4] 标定）' -ForegroundColor Gray
+    } else {
+        $dir = Join-Path $HOME '.cache\huggingface\lerobot\calibration'
+        Get-ChildItem $dir -Recurse -Filter *.json | ForEach-Object {
+            Write-Host ("    {0}" -f $_.FullName) -ForegroundColor White
+        }
+    }
+    Write-Host ''
+    Write-Host '  === HF 设置 ===' -ForegroundColor Cyan
+    $hf = [Environment]::GetEnvironmentVariable('HF_ENDPOINT','User')
+    if ($hf) { Write-Host "    HF_ENDPOINT = $hf" } else { Write-Host '    HF_ENDPOINT 未设置（直连 huggingface.co）' -ForegroundColor Gray }
+    $hu = $env:HF_USER
+    if ($hu) { Write-Host "    HF_USER     = $hu" } else { Write-Host '    HF_USER     未设置（录制数据集时需要）' -ForegroundColor Gray }
+}
+
+function Action-Mirror {
+    Write-Host ''
+    $cur = [Environment]::GetEnvironmentVariable('HF_ENDPOINT','User')
+    if ($cur) { Write-Host "  当前：$cur" } else { Write-Host '  当前：未设置（直连官方）' }
+    Write-Host ''
+    Write-Host '    [1] 使用国内镜像 hf-mirror.com（推荐国内）' -ForegroundColor White
+    Write-Host '    [2] 取消，直连官方 huggingface.co' -ForegroundColor White
+    $sel = Read-Key '选择' '1'
+    if ($sel -eq '2') {
+        [Environment]::SetEnvironmentVariable('HF_ENDPOINT', $null, 'User')
+        $env:HF_ENDPOINT = $null
+        Write-Host '  已取消 HF_ENDPOINT，新终端生效' -ForegroundColor Green
+    } else {
+        [Environment]::SetEnvironmentVariable('HF_ENDPOINT', 'https://hf-mirror.com', 'User')
+        $env:HF_ENDPOINT = 'https://hf-mirror.com'
+        Write-Host '  已设置为 https://hf-mirror.com，新终端生效' -ForegroundColor Green
+    }
+}
+
+function Action-Help {
+    Write-Host ''
+    Write-Host '  === LeRobot 全部命令 ===' -ForegroundColor Cyan
+    $cmds = @(
+        'lerobot-find-port', 'lerobot-setup-motors', 'lerobot-calibrate',
+        'lerobot-teleoperate', 'lerobot-record', 'lerobot-replay',
+        'lerobot-train', 'lerobot-eval', 'lerobot-rollout',
+        'lerobot-find-cameras', 'lerobot-dataset-viz', 'lerobot-imgtransform-viz',
+        'lerobot-info', 'lerobot-edit-dataset', 'lerobot-annotate',
+        'lerobot-find-joint-limits', 'lerobot-setup-can', 'lerobot-build-mp4-sidecar',
+        'lerobot-convert-dcp', 'lerobot-train-tokenizer', 'lerobot-policy-server'
+    )
+    $hasEnv = [bool]($script:ScriptsDir -and (Test-Path -LiteralPath $script:ScriptsDir))
+    foreach ($c in $cmds) {
+        $mark = '  '
+        $color = 'DarkGray'
+        if ($hasEnv) {
+            $exe = Join-Path $script:ScriptsDir ($c + '.exe')
+            if (Test-Path -LiteralPath $exe) { $mark = 'OK'; $color = 'White' }
+        }
+        Write-Host ("    [{0}] {1}" -f $mark, $c) -ForegroundColor $color
+    }
+    if (-not $hasEnv) {
+        Write-Host ''
+        Write-Host '  （环境还没装，所以上面都没标 OK）' -ForegroundColor Yellow
+    }
+    Write-Host ''
+    Write-Host '  查某个命令的全部参数：' -ForegroundColor Gray
+    Write-Host '    lerobot-<命令> --help' -ForegroundColor White
+    Write-Host ''
+    Write-Host '  在任意命令后加 --help 都能看到 --robot.type / --robot.port 这些参数' -ForegroundColor Gray
+}
+
+# ============================================================ 分发
+function Invoke-MenuItem([string]$key) {
+    switch ($key) {
+        '0' { Action-Install }
+        '1' { Action-Test }
+        'w' { Action-HardwareCheck }
+        '2' { Action-FindPort }
+        '3' { Action-SetupMotors }
+        '4' { Action-Calibrate }
+        '5' { Action-Teleoperate }
+        '6' { Action-Record }
+        '7' { Action-Train }
+        '8' { Action-Rollout }
+        '9' { Action-Replay }
+        'c' { Action-Cameras }
+        'v' { Action-Viz }
+        'i' { Action-Info }
+        'm' { Action-Mirror }
+        'h' { Action-Help }
+        'q' {
+            Write-Host ''
+            Write-Host '  再见。' -ForegroundColor Cyan
+            exit 0
+        }
+        default {
+            Write-Host ''
+            Write-Host "  没有这个选项：$key" -ForegroundColor Red
+            Write-Host '  可用：0-9、w、c、v、i、m、h、q' -ForegroundColor Gray
+        }
+    }
+}
+
+# ============================================================ 入口
+$script:EnvPrefix = Get-EnvPrefix $EnvName
+if ($script:EnvPrefix) {
+    $script:PyExe = Join-Path $script:EnvPrefix 'python.exe'
+    $script:ScriptsDir = Join-Path $script:EnvPrefix 'Scripts'
+}
+
+# 直达模式：把编号/字母当参数传
+# 注意：这里千万不要写成 `$null = Invoke-MenuItem ...`。
+# 那样会把子进程（powershell / lerobot-*.exe）的输出全部吞掉，屏幕上什么都不剩。
+if ($Item) {
+    if ($Item -eq 'q') { exit 0 }
+    Invoke-MenuItem ($Item.Trim().ToLower())
+    if ($script:LastCode -gt 0) { exit $script:LastCode }
+    exit 0
+}
+
+# 菜单模式
+while ($true) {
+    Show-Menu
+    $k = Read-Key '请输入'
+    if ($k -eq '') { continue }
+    Invoke-MenuItem $k
+    Pause-Menu
+}
