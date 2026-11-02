@@ -9,6 +9,15 @@ pip 装到一半失败、装完了不知道该敲什么命令。
 
 ---
 
+## 文档
+
+- **[LeRobot 上手笔记](docs/lerobot-notes.md)** —— 从环境搭建到项目架构的原理讲解。
+  回答的是脚本背后的"为什么"：Anaconda 与 Miniconda 到底差什么、Python 模块与包的由来、
+  `pip install -e` 为什么能让改代码立刻生效、`pyproject.toml` 里每一节是什么意思、
+  LeRobot 的 `src/lerobot/` 是怎么组织的、为什么 extras 要把 feetech 单独拆出来。
+
+  卡在某个报错上想弄明白原因时，翻这篇；只想装好跑起来，用下面的菜单就行。
+
 ## 三个文件
 
 | 文件 | 作用 | 大小 |
