@@ -11,6 +11,27 @@ pip 装到一半失败、装完了不知道该敲什么命令。
 
 ---
 
+## 最简用法：双击 `lerobot.bat`
+
+不用记 `powershell -ExecutionPolicy Bypass -File ...` 这一串，也不用开 PowerShell。
+
+1. 把 4 个文件放进同一个文件夹
+2. **双击 `lerobot.bat`**
+3. 出菜单，敲数字
+
+也可以在 CMD 里带参数直接跑：
+
+```bat
+lerobot.bat            打开菜单
+lerobot.bat 4          直接标定（等价于菜单里按 4）
+lerobot.bat install    安装环境（等价于 0）
+lerobot.bat check      软件自检（等价于 1）
+lerobot.bat hw         硬件检查（等价于 w）
+```
+
+> `lerobot.bat` 只是把 CMD 转接到 PowerShell，参数原样透传，并且只在**双击**时
+> 结束时停住窗口（在 CMD 里调用会自动退出，不会卡住）。
+
 ## 文档
 
 - **[LeRobot 上手笔记](docs/lerobot-notes.md)** —— 从环境搭建到项目架构的原理讲解。
@@ -23,20 +44,31 @@ pip 装到一半失败、装完了不知道该敲什么命令。
 - **[真机验证清单](docs/hardware-verification.md)** —— 接上机械臂后按这个走一遍，
   能验证本工具尚未在硬件上确认的部分（标定、双摄配置、控制频率）。
 
-## 三个文件
+## 四个文件
 
 | 文件 | 作用 | 大小 |
 |---|---|---|
-| `lerobot-menu.ps1` | **入口**。交互式菜单，敲数字或字母 | 26 KB |
-| `install-lerobot.ps1` | 安装环境，9 个步骤带进度条 | 44 KB |
+| `lerobot.bat` | **双击入口**。CMD 转接 PowerShell，参数透传 | 2 KB |
+| `lerobot-menu.ps1` | **真正的入口**。交互式菜单，敲数字或字母 | 27 KB |
+| `install-lerobot.ps1` | 安装环境，9 个步骤带进度条 | 45 KB |
 | `test-lerobot.ps1` | 自检，软件 8 项 + 硬件 3 项 | 19 KB |
 
-三个放在同一目录即可。
+四个放在同一目录即可。
 
 ## 快速开始
 
+**方式一（推荐，零门槛）**：双击 `lerobot.bat`，按菜单走。
+
+**方式二**：在 PowerShell 或 CMD 里：
+
+```bat
+cd /d 你放脚本的目录
+lerobot.bat
+```
+
+**方式三**：跳过包装，直接调 PowerShell（等价）：
+
 ```powershell
-# 1. 下载三个文件到同一个目录，然后：
 powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
 ```
 

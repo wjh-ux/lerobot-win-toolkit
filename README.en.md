@@ -13,20 +13,43 @@ machine to `16/16 checks passing`.
 
 ---
 
+## Easiest: double-click `lerobot.bat`
+
+No `powershell -ExecutionPolicy Bypass -File ...` to remember, no PowerShell window to open.
+
+1. Put the four files in the same folder
+2. **Double-click `lerobot.bat`**
+3. Press a number
+
+It also works from CMD with an argument:
+
+```bat
+lerobot.bat            open the menu
+lerobot.bat 4          calibrate (same as pressing 4)
+lerobot.bat install    install the environment (same as 0)
+lerobot.bat check      software self-check (same as 1)
+lerobot.bat hw         hardware check (same as w)
+```
+
+> `lerobot.bat` only forwards to PowerShell and passes arguments through. It pauses at the
+> end **only when double-clicked**, so calling it from a script doesn't hang.
+
 ## What's inside
 
 | File | Purpose |
 |---|---|
-| `lerobot-menu.ps1` | **Entry point.** Interactive menu — press a number or letter |
+| `lerobot.bat` | **Double-click entry.** CMD shim that forwards to PowerShell |
+| `lerobot-menu.ps1` | **Actual entry point.** Interactive menu — press a number or letter |
 | `install-lerobot.ps1` | Installs the environment, 9 steps with a progress bar |
 | `test-lerobot.ps1` | Self-check: 8 software items + 3 hardware items |
 
-Keep all three in the same folder.
+Keep all four in the same folder.
 
 ## Quick start
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
+```bat
+cd /d path\to\toolkit
+lerobot.bat
 ```
 
 ```
