@@ -73,3 +73,21 @@ LeRobot 的硬依赖是 Python ≥3.12 + PyTorch。OpenWrt 环境下：
 
 - [ ] v1.2.0 之后是否需要把 Linux 脚本并入同一个仓库（现在只在 Windows 工具里）
 - [ ] 是否需要为 Windows 也补一份「卸载 / 清空环境」脚本
+
+## 4. GPU 驱动管理（已做，未在真卡上验证）
+
+`lerobot-menu.sh` 的 `[g]` 面板支持：检测显卡、装驱动（闭源 / 开源内核模块）、卸载驱动、
+切换 PyTorch CPU/CUDA 版。
+
+- [x] 从 `lspci` 型号推断架构（Pascal/Volta/Turing/Ampere/Ada/Hopper/Blackwell）
+- [x] 按架构判断开源模块可用性（Turing 起支持）
+- [x] 各架构的建议最低驱动版本
+- [x] 卸载：`apt purge '^nvidia-.*' '^libnvidia-.*'` + `autoremove`
+- [ ] **未在真实 NVIDIA 显卡上跑过** —— 这台 VM 没有 GPU，只验证了检测分类和命令拼装
+
+真机测试时重点确认：
+
+- [ ] `nvidia-driver-XXX` 装完重启后 `nvidia-smi` 有输出
+- [ ] 开源模块 `-open` 在 30/40 系上能正常加载（Secure Boot 关掉的前提下）
+- [ ] V100 / GTX 10 系选开源时被正确纠正为闭源
+- [ ] 卸载后能正常回退到 nouveau，桌面不黑屏

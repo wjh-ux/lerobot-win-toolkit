@@ -105,26 +105,70 @@ Get-ChildItem .\*.ps1 | Unblock-File
 
 | 文件 | 作用 |
 |---|---|
-| `install-lerobot.sh` | 安装环境，同样的镜像降级与进度显示 |
+| `lerobot-menu.sh` | **工具箱面板**。敲数字或字母，与 Windows 版菜单对应 |
+| `install-lerobot.sh` | 安装环境，镜像降级 + 进度显示 |
 | `test-lerobot.sh` | 自检，软件组 + 硬件组（`--hw`） |
 
 ```bash
-chmod +x install-lerobot.sh test-lerobot.sh
-./install-lerobot.sh --dry-run      # 先看计划
-./install-lerobot.sh                # 正式安装
+chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
+./lerobot-menu.sh                   # 打开面板
+./install-lerobot.sh --dry-run      # 或直接用安装脚本
 ./test-lerobot.sh                   # 装完自检
-./test-lerobot.sh --hw              # 连上机械臂后再查硬件
 ```
 
-常用参数：
+面板长这样：
 
-```bash
-./install-lerobot.sh --from-pypi              # 不走 git，从 pip 镜像取 sdist
-./install-lerobot.sh --cpu                    # 装 CPU 版 torch，省约 4 GB
-./install-lerobot.sh --skip-apt               # 系统依赖已装好
-./install-lerobot.sh --env myenv --extras core_scripts,feetech
-./install-lerobot.sh --pypi-version 0.6.1     # 钉版本
 ```
+   环境
+    [0] 安装 / 修复环境
+    [1] 软件环境自检
+    [w] 硬件检查（串口/相机/标定）
+    [g] GPU 与 NVIDIA 驱动   ← 装驱动、切换 CPU/CUDA
+
+   机械臂准备（按顺序做一次）
+    [2] 查找串口    [3] 设置电机 ID    [4] 标定机械臂
+
+   日常使用
+    [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放
+
+   其他
+    [c] 相机检测   [i] 环境详情   [m] HF 镜像   [h] 命令速查   [q] 退出
+```
+
+也可以直达：`./lerobot-menu.sh g`（GPU 面板）、`./lerobot-menu.sh 4`（标定）。
+加 `--dry-run` 时所有安装类操作只打印命令。
+
+### GPU 驱动管理（`[g]`）
+
+支持 10 / 20 / 30 / 40 / 50 系、V100、H100 / H200、RTX PRO 6000 等，
+闭源驱动和开源内核模块两种都能装，也能卸载。
+
+```
+    [1] 检测显卡 / 驱动状态
+    [2] 安装驱动（闭源 / 开源可选）
+    [3] 卸载驱动
+    [4] PyTorch 切 CPU / CUDA 版
+```
+
+**从型号自动判断架构**，并据此决定开源模块能不能用：
+
+| 架构 | 代表型号 | 开源内核模块 |
+|---|---|---|
+| Pascal | GTX 10 系、P40、P100 | ❌ 只能用闭源 |
+| Volta | V100 | ❌ 只能用闭源 |
+| Turing | RTX 20 系、T4 | ✅ |
+| Ampere | RTX 30 系、A100、A10 | ✅ |
+| Ada | RTX 40 系、L40、L4 | ✅ |
+| Hopper | H100、H200 | ✅ |
+| Blackwell | RTX 50 系、B100/B200、RTX PRO 6000 | ✅ |
+
+开源模块从 **Turing（20 系）** 才开始支持，10 系和 V100 选开源会被自动纠正为闭源。
+
+安装前会把「装哪个包、什么类型、要注意什么」列清楚再让你确认；卸载用
+`apt purge '^nvidia-.*' '^libnvidia-.*'` + `autoremove`，同样要确认。
+
+> 驱动安装需要 sudo、会触发 DKMS 重新编译内核模块、装完要重启。
+> 有桌面环境时**重启前别注销**，否则可能黑屏。
 
 **关于 `--cpu`**：PyPI 的 Linux torch 轮子自带整套 CUDA 库（`nvidia-*`、`cuda-toolkit`），
 在没有 NVIDIA GPU 的机器上白占约 4.5 GB。加 `--cpu` 会先从国内镜像

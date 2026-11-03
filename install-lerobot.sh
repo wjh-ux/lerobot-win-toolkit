@@ -814,6 +814,7 @@ PY
                 echo "  ${C_GRY}  2. 在虚拟机里，且没开 GPU 直通${C_RESET}"
                 echo "  ${C_GRY}  3. 容器里没挂 --gpus all，或没装 nvidia-container-toolkit${C_RESET}"
                 echo "  ${C_GRY}排查： nvidia-smi   → 有输出说明驱动正常${C_RESET}"
+                printf '  %s装驱动： ./lerobot-menu.sh g  → [2] 安装驱动（开源/闭源可选）%s\n' "$C_GRY" "$C_RESET"
                 printf '  %s改回 CPU 版可省空间： %s\n' "$C_GRY" "./install-lerobot.sh --cpu --env ${ENV_NAME} ${C_RESET}"
                 FAILURES=$((FAILURES+1))
             else
