@@ -127,9 +127,41 @@ chmod +x install-lerobot.sh test-lerobot.sh
 ```
 
 **关于 `--cpu`**：PyPI 的 Linux torch 轮子自带整套 CUDA 库（`nvidia-*`、`cuda-toolkit`），
-在没有 NVIDIA GPU 的机器上白占约 4 GB。加 `--cpu` 会先从国内镜像
+在没有 NVIDIA GPU 的机器上白占约 4.5 GB。加 `--cpu` 会先从国内镜像
 （上海交大 `mirror.sjtu.edu.cn/pytorch-wheels/cpu`，官方 `download.pytorch.org/whl/cpu` 兜底）
 装 `torch+torchvision` 的 CPU 轮子，再装 lerobot。
+
+### GPU 自动检测
+
+**默认不用加参数**，脚本会自己判断：
+
+1. **检测**：`nvidia-smi` → `/proc/driver/nvidia/version` → `lspci`，三重判断
+2. **推荐**：查到 NVIDIA 卡就提示机型、驱动版本，并推荐 CUDA 版，问你 `[Y/n]`
+3. **核查**：装完检查 `torch.cuda.is_available()`，不完整会明确告诉你是哪种情况
+
+```
+  [ OK ]  检测到 GPU: NVIDIA GeForce RTX 4090（驱动 550.54.14）
+  检测到 NVIDIA GPU，推荐安装 CUDA 版 PyTorch
+    CUDA 版体积大（约 +4.5 GB），但能用显卡训练；
+    CPU 版只有 2.4 GB，装得快，适合只做推理或没显卡驱动的情况。
+  安装 CUDA 版？[Y/n]
+```
+
+没显卡就**自动装 CPU 版**，不问（省 4.5 GB）。
+
+| 参数 | 行为 |
+|---|---|
+| （默认） | 自动检测，有卡会问，没卡直接 CPU |
+| `--gpu` | 强制 CUDA 版；没卡会警告"装了也用不上" |
+| `--cpu` | 强制 CPU 版 |
+| `--yes` | 非交互：不问，有卡按 GPU、没卡按 CPU |
+
+装完的核查会区分三种结果：
+
+- **GPU 可用** → 打印卡名和显存，绿色通过
+- **装了 CUDA 版但 `cuda.is_available()` 为假** → 列出常见原因（驱动没装/版本太老、
+  虚拟机没开 GPU 直通、容器没挂 `--gpus all`），并计入失败数
+- **CPU 版** → 正常通过；如果机器上其实有卡，会提示"想用显卡就加 `--gpu` 重装"
 
 与 Windows 版的差异：
 

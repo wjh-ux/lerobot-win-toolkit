@@ -7,12 +7,18 @@
 #
 # 用法：
 #   chmod +x install-lerobot.sh
-#   ./install-lerobot.sh                 # 标准安装
+#   ./install-lerobot.sh                 # 标准安装（自动检测 GPU，有卡会问你）
 #   ./install-lerobot.sh --dry-run       # 只打印要执行的命令
 #   ./install-lerobot.sh --from-pypi     # 不走 git，直接从 pip 镜像下 sdist
 #   ./install-lerobot.sh --env myenv --extras core_scripts,feetech
-#   ./install-lerobot.sh --cpu           # 装 CPU 版 torch，省掉约 4 GB 的 CUDA 依赖
+#   ./install-lerobot.sh --gpu           # 强制 CUDA 版
+#   ./install-lerobot.sh --cpu           # 强制 CPU 版，省掉约 4.5 GB 的 CUDA 依赖
+#   ./install-lerobot.sh --yes           # 非交互：不问，有卡按 GPU、无卡按 CPU
 #   ./install-lerobot.sh --skip-apt      # 跳过系统依赖（已装好时用）
+#
+# 关于 GPU：脚本会先检测本机有没有 NVIDIA 卡（nvidia-smi / /proc / lspci 三重判断），
+#   有卡就推荐 CUDA 版并让你确认；没有就自动装 CPU 版（省约 4.5 GB）。
+#   装完还会核查 torch.cuda.is_available()，不完整会明确告诉你原因。
 #
 # 已在 Ubuntu 22.04.5（x86_64，无 GPU）实机跑通：
 #   lerobot 0.6.1 + torch + ffmpeg，自检 15 PASS / 4 WARN / 0 FAIL。
@@ -29,7 +35,10 @@ DRY_RUN=0
 FROM_PYPI=0
 SKIP_APT=0
 PIP_VERSION=""
-CPU_ONLY=0
+# auto = 自动检测 GPU 并询问；cpu = 强制 CPU；gpu = 强制 CUDA 版
+TORCH_FLAVOR="auto"
+CPU_ONLY=0          # 兼容旧的 --cpu，等同 TORCH_FLAVOR=cpu
+ASSUME_YES=0        # 非交互环境：不问，直接按推荐走
 
 # ---------------------------------------------------------------- 输出
 C_RESET=$'\033[0m'
@@ -181,7 +190,9 @@ while [ $# -gt 0 ]; do
         --dry-run)    DRY_RUN=1 ;;
         --from-pypi)  FROM_PYPI=1 ;;
         --skip-apt)   SKIP_APT=1 ;;
-        --cpu)        CPU_ONLY=1 ;;
+        --cpu)        CPU_ONLY=1; TORCH_FLAVOR="cpu" ;;
+        --gpu)        TORCH_FLAVOR="gpu" ;;
+        --yes|-y)     ASSUME_YES=1 ;;
         --env)        ENV_NAME="$2"; shift ;;
         --python)     PY_VERSION="$2"; shift ;;
         --extras)     EXTRAS="$2"; shift ;;
@@ -193,10 +204,54 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# 装了 CPU 版 torch 就多一步，步骤总数跟着变，避免出现"第 6/7 步"之后直接结束
-if [ "$CPU_ONLY" -eq 1 ]; then
-    STEP_TOTAL=7
-fi
+# PyTorch 选择这一步现在总是存在（CPU 版自己装、GPU 版随 lerobot 装），所以固定 7 步
+STEP_TOTAL=7
+
+# ---------------------------------------------------------------- GPU 检测
+GPU_NAME=""          # 检测到的显卡名，空表示没有
+GPU_DRIVER=""        # 驱动版本，空表示没装驱动
+GPU_COUNT=0
+
+detect_gpu() {
+    # 三重判断，任何一条命中就算有卡：
+    #   1) nvidia-smi（驱动装好的话一定有）
+    #   2) /proc/driver/nvidia/version（驱动在，但 nvidia-smi 可能不在 PATH）
+    #   3) lspci（有硬件但驱动没装，这种情况也要告诉用户）
+    local line
+
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        line=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1)
+        if [ -n "$line" ]; then
+            GPU_NAME=$(printf '%s' "$line" | cut -d',' -f1 | sed 's/^ *//;s/ *$//')
+            GPU_DRIVER=$(printf '%s' "$line" | cut -d',' -f2 | sed 's/^ *//;s/ *$//')
+            GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)
+            return 0
+        fi
+    fi
+
+    if [ -r /proc/driver/nvidia/version ]; then
+        GPU_DRIVER=$(awk '/Kernel Module/{print $8}' /proc/driver/nvidia/version 2>/dev/null | head -1)
+        GPU_NAME="NVIDIA GPU（型号未知）"
+        GPU_COUNT=1
+        return 0
+    fi
+
+    if command -v lspci >/dev/null 2>&1; then
+        line=$(lspci 2>/dev/null | grep -iE 'vga.*nvidia|3d controller.*nvidia|nvidia.*vga' | head -1)
+        if [ -n "$line" ]; then
+            GPU_NAME=$(printf '%s' "$line" | sed 's/.*: //')
+            GPU_DRIVER=""      # 有硬件但可能没驱动
+            GPU_COUNT=1
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# 关键数字：显卡算力（CUDA capability）决定能不能跑某些策略，顺便看一眼
+# 这里只做"能否用"的判断，不深挖
+
 
 # ---------------------------------------------------------------- 镜像表
 PIP_MIRRORS=(
@@ -436,13 +491,62 @@ pip_try() {
 info "升级 pip / setuptools / wheel"
 pip_try install --upgrade pip setuptools wheel || die "pip 无法从任何镜像升级"
 
-# ================================================================ 3.5 CPU torch
-if [ "$CPU_ONLY" -eq 1 ]; then
-    step "安装 CPU 版 PyTorch（省掉 CUDA 依赖）"
+# ================================================================ 3.5 PyTorch
+step "选择并安装 PyTorch（自动检测 GPU）"
 
-    # PyPI 的 Linux torch 轮子自带整套 CUDA 库（nvidia-*），无 GPU 的机器上白占约 4 GB。
-    # 这里从专门只放 CPU 轮子的索引装，并用 --no-deps：torch 的依赖（sympy/networkx 等）
-    # 交给后面装 lerobot 时从 pypi 镜像正常解析。
+# 先看看这台机器有没有 NVIDIA 卡
+HAVE_GPU=0
+if detect_gpu; then
+    HAVE_GPU=1
+    ok "检测到 GPU: $GPU_NAME${GPU_DRIVER:+（驱动 $GPU_DRIVER）}"
+    if [ -n "$GPU_COUNT" ] && [ "$GPU_COUNT" -gt 1 ]; then
+        info "共 $GPU_COUNT 张卡"
+    fi
+    if [ -z "$GPU_DRIVER" ]; then
+        warn "没读到驱动版本 —— 可能只装了硬件、没装 NVIDIA 驱动"
+        info "这种情况即使装 CUDA 版 torch，torch.cuda.is_available() 也会是 False"
+        info "先装驱动： https://www.nvidia.com/Download/index.aspx"
+    fi
+else
+    ok "未检测到 NVIDIA GPU"
+fi
+
+# 决定装哪个版本
+torch_flavor_msg=""
+case "$TORCH_FLAVOR" in
+    cpu) FINAL_FLAVOR="cpu" ; torch_flavor_msg="按参数 --cpu 强制 CPU 版" ;;
+    gpu) FINAL_FLAVOR="gpu" ; torch_flavor_msg="按参数 --gpu 强制 CUDA 版" ;;
+    *)
+        if [ "$HAVE_GPU" -eq 1 ]; then
+            echo
+            echo "  ${C_CYN}检测到 NVIDIA GPU，推荐安装 CUDA 版 PyTorch${C_RESET}"
+            echo "  ${C_GRY}  CUDA 版体积大（约 +4.5 GB），但能用显卡训练；${C_RESET}"
+            echo "  ${C_GRY}  CPU 版只有 2.4 GB，装得快，适合只做推理或没显卡驱动的情况。${C_RESET}"
+            if [ "$ASSUME_YES" -eq 1 ]; then
+                FINAL_FLAVOR="gpu"
+                torch_flavor_msg="非交互模式，按推荐选 CUDA 版"
+                ok "非交互（--yes）：默认选 CUDA 版"
+            else
+                printf '  安装 CUDA 版？[Y/n] '
+                read -r ans || ans="y"
+                case "$ans" in
+                    n|N|no|NO) FINAL_FLAVOR="cpu"; torch_flavor_msg="用户选择 CPU 版" ;;
+                    *)         FINAL_FLAVOR="gpu"; torch_flavor_msg="用户确认 CUDA 版" ;;
+                esac
+                ok "$torch_flavor_msg"
+            fi
+        else
+            FINAL_FLAVOR="cpu"
+            torch_flavor_msg="没有 GPU，自动选 CPU 版（比默认省约 4.5 GB）"
+            ok "$torch_flavor_msg"
+        fi
+        ;;
+esac
+info "决定：$FINAL_FLAVOR 版 torch"
+
+if [ "$FINAL_FLAVOR" = "cpu" ]; then
+    # PyPI 的 Linux torch 轮子自带整套 CUDA 库（nvidia-*），无 GPU 时白占约 4 GB。
+    # 从只放 CPU 轮子的索引装，用 --no-deps：torch 的依赖交给装 lerobot 时解析。
     CPU_INDEXES=(
         "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
         "https://download.pytorch.org/whl/cpu"
@@ -452,7 +556,7 @@ if [ "$CPU_ONLY" -eq 1 ]; then
         info "尝试 $idx"
         if probe "${idx}/torch/"; then
             # 必须钉版本：CPU 索引里最新是 2.15，而 lerobot 要 torch<2.12。
-            # 不钉的话这里装 2.15，装 lerobot 时又会被判不满足、把 CUDA 版拉回来，白省。
+            # 不钉的话这里装 2.15，装 lerobot 时又判不满足、把 CUDA 版拉回来，白省。
             if run "$PY_BIN" -m pip install "torch>=2.7,<2.12" "torchvision>=0.22,<0.27" \
                     --index-url "$idx" --no-deps \
                     --no-warn-script-location --disable-pip-version-check; then
@@ -464,19 +568,19 @@ if [ "$CPU_ONLY" -eq 1 ]; then
             info "  不通，换下一个"
         fi
     done
-
     if [ "$CPU_OK" -eq 1 ]; then
-        if [ "$DRY_RUN" -eq 0 ]; then
-            tinfo="$("$PY_BIN" -c 'import torch;print(torch.__version__, torch.cuda.is_available())' 2>/dev/null || true)"
-            ok "CPU 版 torch 就位: $tinfo"
-        else
-            ok "（DryRun）会安装 CPU 版 torch"
-        fi
+        [ "$DRY_RUN" -eq 0 ] && ok "CPU 版 torch 就位" || ok "（DryRun）会安装 CPU 版 torch"
     else
         warn "CPU 索引都不可用，回退成 PyPI 默认（会带上 CUDA 依赖）"
-        info "也可以手动装： $PY_BIN -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu"
+        info "可手动： $PY_BIN -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu"
+    fi
+else
+    info "CUDA 版随下一步装 lerobot 时一起安装（PyPI 默认轮子）"
+    if [ "$HAVE_GPU" -eq 0 ]; then
+        warn "--gpu 指定了 CUDA 版，但没检测到 NVIDIA 卡 —— 装了也用不上，纯占空间"
     fi
 fi
+
 
 # ================================================================ 4. ffmpeg
 step "安装 ffmpeg（TorchCodec 解码视频用）"
@@ -647,6 +751,77 @@ if [ "$DRY_RUN" -eq 0 ]; then
     ok "环境路径: $ENV_PREFIX"
 else
     info "DryRun：以上命令均未执行"
+fi
+
+# ---------------------------------------------------------------- GPU 完整性核查
+if [ "$DRY_RUN" -eq 0 ]; then
+    section "PyTorch / GPU 核查"
+
+    # 用一段 python 一次性取全部信息，避免多次启动
+    tj="$("$PY_BIN" - <<'PY' 2>/dev/null || true
+import json, torch
+d = {"ver": torch.__version__,
+     "cuda_build": torch.version.cuda or "",
+     "avail": bool(torch.cuda.is_available()),
+     "count": int(torch.cuda.device_count())}
+if d["avail"] and d["count"] > 0:
+    d["name"] = torch.cuda.get_device_name(0)
+    try:
+        p = torch.cuda.get_device_properties(0)
+        d["vram"] = round(p.total_memory / 1024**3, 1)
+        d["cap"] = "%d.%d" % (p.major, p.minor)
+    except Exception:
+        pass
+print(json.dumps(d))
+PY
+)"
+
+    if [ -z "$tj" ]; then
+        warn "取不到 torch 信息（可能没装好）"
+    else
+        # 解析 JSON（用 python3，Ubuntu 一定有）
+        tver=$(printf '%s' "$tj"  | python3 -c 'import json,sys;print(json.load(sys.stdin)["ver"])' 2>/dev/null || echo "?")
+        tcu=$(printf '%s' "$tj"   | python3 -c 'import json,sys;print(json.load(sys.stdin).get("cuda_build",""))' 2>/dev/null || echo "")
+        tav=$(printf '%s' "$tj"   | python3 -c 'import json,sys;print(json.load(sys.stdin)["avail"])' 2>/dev/null || echo "False")
+        tcnt=$(printf '%s' "$tj"  | python3 -c 'import json,sys;print(json.load(sys.stdin)["count"])' 2>/dev/null || echo "0")
+        tname=$(printf '%s' "$tj" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("name",""))' 2>/dev/null || echo "")
+        tvram=$(printf '%s' "$tj" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("vram",""))' 2>/dev/null || echo "")
+
+        info "torch 版本 : $tver"
+        if [ -n "$tcu" ]; then
+            info "CUDA 编译版本: $tcu"
+        else
+            info "CUDA 编译版本: 无（这是 CPU 版轮子）"
+        fi
+
+        if [ "$tav" = "True" ]; then
+            ok "GPU 可用：$tname${tvram:+（${tvram} GB 显存）}"
+            [ "$tcnt" -gt 1 ] && info "共 $tcnt 张卡"
+            echo
+            echo "  ${C_GRN}GPU 版安装完整，可以直接用显卡训练${C_RESET}"
+        else
+            if [ -n "$tcu" ]; then
+                # 装的是 CUDA 版，但用不上 —— 这才是用户真正需要知道的
+                echo
+                echo "  ${C_YEL}[注意] 装的是 CUDA 版 torch（$tver），但 torch.cuda.is_available() = False${C_RESET}"
+                echo "  ${C_GRY}常见原因，按可能性排序：${C_RESET}"
+                echo "  ${C_GRY}  1. 没装 NVIDIA 驱动，或驱动版本太老${C_RESET}"
+                if [ -n "$GPU_DRIVER" ]; then
+                    echo "  ${C_GRY}     当前驱动: $GPU_DRIVER${C_RESET}"
+                else
+                    echo "  ${C_GRY}     当前读不到驱动版本${C_RESET}"
+                fi
+                echo "  ${C_GRY}  2. 在虚拟机里，且没开 GPU 直通${C_RESET}"
+                echo "  ${C_GRY}  3. 容器里没挂 --gpus all，或没装 nvidia-container-toolkit${C_RESET}"
+                echo "  ${C_GRY}排查： nvidia-smi   → 有输出说明驱动正常${C_RESET}"
+                printf '  %s改回 CPU 版可省空间： %s\n' "$C_GRY" "./install-lerobot.sh --cpu --env ${ENV_NAME} ${C_RESET}"
+                FAILURES=$((FAILURES+1))
+            else
+                ok "CPU 版 torch（$tver），不需要 GPU"
+                [ "$HAVE_GPU" -eq 1 ] && info "机器上有 GPU 但装的是 CPU 版，想用显卡就加 --gpu 重装"
+            fi
+        fi
+    fi
 fi
 
 printf '\n  下一步：\n'
