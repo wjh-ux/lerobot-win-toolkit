@@ -204,8 +204,13 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# PyTorch 选择这一步现在总是存在（CPU 版自己装、GPU 版随 lerobot 装），所以固定 7 步
+# PyTorch 选择这一步现在总是存在（CPU 版自己装、GPU 版随 lerobot 装），所以基础是 7 步。
+# 但 --skip-apt 时系统依赖那步只是个 section，不计数，总数要减 1，
+# 否则进度条走不到 100%，最后会出现"第 6/7 步"然后结束。
 STEP_TOTAL=7
+if [ "$SKIP_APT" -eq 1 ]; then
+    STEP_TOTAL=$((STEP_TOTAL-1))
+fi
 
 # ---------------------------------------------------------------- GPU 检测
 GPU_NAME=""          # 检测到的显卡名，空表示没有
