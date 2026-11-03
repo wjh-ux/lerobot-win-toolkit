@@ -92,12 +92,45 @@ Get-ChildItem .\*.ps1 | Unblock-File
 
 ## 四个文件
 
+### Windows
+
 | 文件 | 作用 | 大小 |
 |---|---|---|
 | `lerobot.bat` | **双击入口**。CMD 转接 PowerShell，参数透传 | 2 KB |
 | `lerobot-menu.ps1` | **真正的入口**。交互式菜单，敲数字或字母 | 27 KB |
 | `install-lerobot.ps1` | 安装环境，9 个步骤带进度条 | 45 KB |
 | `test-lerobot.ps1` | 自检，软件 8 项 + 硬件 3 项 | 19 KB |
+
+### Linux（Ubuntu / Debian）
+
+| 文件 | 作用 |
+|---|---|
+| `install-lerobot.sh` | 安装环境，同样的镜像降级与进度显示 |
+
+```bash
+chmod +x install-lerobot.sh
+./install-lerobot.sh --dry-run      # 先看计划
+./install-lerobot.sh                # 正式安装
+```
+
+常用参数：
+
+```bash
+./install-lerobot.sh --from-pypi              # 不走 git，从 pip 镜像取 sdist
+./install-lerobot.sh --skip-apt               # 系统依赖已装好
+./install-lerobot.sh --env myenv --extras core_scripts,feetech
+./install-lerobot.sh --pypi-version 0.6.1     # 钉版本
+```
+
+与 Windows 版的差异：
+
+- **系统依赖走 apt**（`cmake build-essential python3-dev pkg-config git curl` + 一组 `libav*-dev`），
+  需要有 sudo 权限。脚本只在 `sudo -n true` 通过时才自动装，否则会打印手动命令让你执行 —— 
+  因为它经常跑在非交互环境里，不能卡在密码提示上。
+- **HTTP 工具三级回退**：`curl` → `wget` → `python3`。Ubuntu 22.04 默认没有 curl，
+  少了这层回退会因为"探测不到镜像"直接失败。
+- **`HF_ENDPOINT` 写进 `~/.bashrc` / `~/.profile`**，而不是改系统配置。
+
 
 四个放在同一目录即可。
 

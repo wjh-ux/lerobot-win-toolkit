@@ -10,3 +10,5 @@
 # ä»“åº“é‡Œï¼ˆä¹Ÿå°±æ˜¯ raw ä¸‹è½½æ‹¿åˆ°çš„ï¼‰ä»ç„¶æ˜¯ LFã€‚
 *.bat -text
 *.cmd -text
+# shell ½Å±¾±ØĞë±£³Ö LF£¬ÓĞ CRLF »áµ¼ÖÂ 'bad interpreter' »òÎŞÊä³ö
+*.sh -text
