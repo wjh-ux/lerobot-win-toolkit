@@ -34,6 +34,51 @@ lerobot.bat hw         hardware check (same as w)
 > `lerobot.bat` only forwards to PowerShell and passes arguments through. It pauses at the
 > end **only when double-clicked**, so calling it from a script doesn't hang.
 
+## About administrator rights
+
+**No admin rights are needed anywhere.** Not "we try to avoid it" — there is simply no
+privileged operation in these scripts:
+
+| Might look like it needs admin | What actually happens |
+|---|---|
+| Installing conda | `InstallationType=JustMe`, installs into `%USERPROFILE%`, never `Program Files` |
+| Creating the env, installing packages | All inside the user profile |
+| Setting `HF_ENDPOINT` | `SetEnvironmentVariable(..., 'User')` — current user only |
+| Changing the execution policy | Not touched. `-ExecutionPolicy Bypass` is passed on the command line only |
+| Registry / services / firewall | Not involved at all |
+
+The reference run happened in an **unelevated** session (`IsInRole(Administrator)` = `False`):
+Miniconda silent install, `conda create`, `pip install torch` and the user env var all succeeded.
+
+### What *does* block you (and it isn't permission)
+
+**1. Group Policy locks the execution policy** — the real wall.
+
+`-ExecutionPolicy Bypass` overrides the `CurrentUser` / `LocalMachine` scopes, but it **cannot**
+override `MachinePolicy` / `UserPolicy` pushed by GPO. Check with:
+
+```powershell
+Get-ExecutionPolicy -List
+```
+
+If `MachinePolicy` is anything other than `Undefined`, you need IT. There is no user-level
+workaround for that.
+
+**2. A downloaded zip carries the Mark-of-the-Web**
+
+Files extracted from a downloaded archive are marked untrusted; under `RemoteSigned`
+PowerShell refuses to run them. `lerobot.bat` runs `Unblock-File` on the `.ps1` files before
+starting, so normally you won't hit this. Manually, if needed:
+
+```powershell
+Get-ChildItem .\*.ps1 | Unblock-File
+```
+
+**3. SmartScreen says "Windows protected your PC"**
+
+That's just Windows warning about an unfamiliar executable — click **More info → Run anyway**.
+Nothing to do with admin rights.
+
 ## What's inside
 
 | File | Purpose |

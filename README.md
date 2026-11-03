@@ -32,6 +32,52 @@ lerobot.bat hw         硬件检查（等价于 w）
 > `lerobot.bat` 只是把 CMD 转接到 PowerShell，参数原样透传，并且只在**双击**时
 > 结束时停住窗口（在 CMD 里调用会自动退出，不会卡住）。
 
+## 关于管理员权限
+
+**全程不需要管理员权限。** 不是"尽量不用"，而是脚本里根本没有需要提权的操作：
+
+| 可能被误认为要提权的地方 | 实际做法 |
+|---|---|
+| 装 conda | `InstallationType=JustMe`，装到 `%USERPROFILE%`，不写 `Program Files` |
+| 建 conda 环境、装包 | 都在用户目录下 |
+| 设 `HF_ENDPOINT` | `SetEnvironmentVariable(..., 'User')`，只写当前用户 |
+| 改执行策略 | 不改。只在命令行传 `-ExecutionPolicy Bypass`，不碰系统设置 |
+| 注册表 / 服务 / 防火墙 | 完全不涉及 |
+
+实测环境就是一个**未提权**的会话（`IsInRole(Administrator)` = `False`），
+Miniconda 静默安装、`conda create`、`pip install torch`、写用户环境变量全部成功。
+
+### 那什么情况会"跑不起来"
+
+下面三种都不是权限问题，但表现很像：
+
+**1. 组策略锁死了执行策略（真正的墙）**
+
+命令行传的 `-ExecutionPolicy Bypass` 会覆盖 `CurrentUser` / `LocalMachine` 级别，
+但**覆盖不了** GPO 下发的 `MachinePolicy` / `UserPolicy`。自查：
+
+```powershell
+Get-ExecutionPolicy -List
+```
+
+如果 `MachinePolicy` 不是 `Undefined`，那就得找 IT。这种情况普通用户无解，
+也不是本工具的锅。
+
+**2. 下载的 zip 带有"Internet 标记"**
+
+从网页下载的 zip 解压后，里面的文件会被标记为不受信任，`RemoteSigned` 策略下
+PowerShell 会拒绝执行。`lerobot.bat` 会在启动前自动对这些 `.ps1` 执行 `Unblock-File`，
+正常情况下你碰不到这个问题。万一还不行，手动解一下：
+
+```powershell
+Get-ChildItem .\*.ps1 | Unblock-File
+```
+
+**3. SmartScreen 提示"Windows 已保护你的电脑"**
+
+双击下载来的 `.bat` 可能出现这个提示。点 **更多信息 → 仍要运行** 即可，
+这不涉及管理员权限，只是 Windows 对陌生可执行文件的提醒。
+
 ## 文档
 
 - **[LeRobot 上手笔记](docs/lerobot-notes.md)** —— 从环境搭建到项目架构的原理讲解。

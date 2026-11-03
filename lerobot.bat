@@ -20,6 +20,10 @@ rem ---- was this started by double-click? then we pause at the end ----
 set "DOUBLECLICK="
 echo %cmdcmdline% | find /i "%~nx0" >nul 2>nul && set "DOUBLECLICK=1"
 
+rem ---- remove Mark-of-the-Web: a downloaded zip marks files as untrusted, ----
+rem ---- which RemoteSigned policies refuse to run. Harmless if absent.    ----
+powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%~dp0' -Filter *.ps1 | Unblock-File" >nul 2>nul
+
 if not exist "%PS1%" goto :no_ps1
 
 where powershell >nul 2>nul
