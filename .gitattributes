@@ -1,0 +1,12 @@
+# 通用规则放最前面。git 的属性规则是"后面的覆盖前面的"，
+# 所以针对性的规则必须写在通用规则之后，否则会被 * text=auto 盖掉。
+* text=auto
+
+# 批处理文件必须保持 CRLF，否则 CMD 解析 goto / 标签会出问题。
+# 用 -text 表示"不要做任何行尾转换"：仓库里存的就是原样的 CRLF，
+# 这样 git clone 和直接下载 raw 拿到的都对。
+#
+# 注意不能用 *.bat text eol=crlf —— 那只是检出时转 CRLF，
+# 仓库里（也就是 raw 下载拿到的）仍然是 LF。
+*.bat -text
+*.cmd -text
