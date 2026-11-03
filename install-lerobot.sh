@@ -11,10 +11,12 @@
 #   ./install-lerobot.sh --dry-run       # 只打印要执行的命令
 #   ./install-lerobot.sh --from-pypi     # 不走 git，直接从 pip 镜像下 sdist
 #   ./install-lerobot.sh --env myenv --extras core_scripts,feetech
+#   ./install-lerobot.sh --cpu           # 装 CPU 版 torch，省掉约 4 GB 的 CUDA 依赖
 #   ./install-lerobot.sh --skip-apt      # 跳过系统依赖（已装好时用）
 #
-# 注意：本脚本在写的时候只做过 `bash -n` 语法检查，
-#       尚未在真实 Ubuntu/Debian 上完整跑通过。第一次使用建议先 --dry-run。
+# 已在 Ubuntu 22.04.5（x86_64，无 GPU）实机跑通：
+#   lerobot 0.6.1 + torch + ffmpeg，自检 15 PASS / 4 WARN / 0 FAIL。
+# 首次使用仍建议先跑 --dry-run 看计划。
 
 set -euo pipefail
 
@@ -27,6 +29,7 @@ DRY_RUN=0
 FROM_PYPI=0
 SKIP_APT=0
 PIP_VERSION=""
+CPU_ONLY=0
 
 # ---------------------------------------------------------------- 输出
 C_RESET=$'\033[0m'
@@ -178,16 +181,22 @@ while [ $# -gt 0 ]; do
         --dry-run)    DRY_RUN=1 ;;
         --from-pypi)  FROM_PYPI=1 ;;
         --skip-apt)   SKIP_APT=1 ;;
+        --cpu)        CPU_ONLY=1 ;;
         --env)        ENV_NAME="$2"; shift ;;
         --python)     PY_VERSION="$2"; shift ;;
         --extras)     EXTRAS="$2"; shift ;;
         --dir)        INSTALL_DIR="$2"; shift ;;
         --pypi-version) PIP_VERSION="$2"; shift ;;
-        -h|--help)    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)    awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
         *) die "不认识的参数: $1（用 --help 看用法）" ;;
     esac
     shift
 done
+
+# 装了 CPU 版 torch 就多一步，步骤总数跟着变，避免出现"第 6/7 步"之后直接结束
+if [ "$CPU_ONLY" -eq 1 ]; then
+    STEP_TOTAL=7
+fi
 
 # ---------------------------------------------------------------- 镜像表
 PIP_MIRRORS=(
@@ -426,6 +435,48 @@ pip_try() {
 
 info "升级 pip / setuptools / wheel"
 pip_try install --upgrade pip setuptools wheel || die "pip 无法从任何镜像升级"
+
+# ================================================================ 3.5 CPU torch
+if [ "$CPU_ONLY" -eq 1 ]; then
+    step "安装 CPU 版 PyTorch（省掉 CUDA 依赖）"
+
+    # PyPI 的 Linux torch 轮子自带整套 CUDA 库（nvidia-*），无 GPU 的机器上白占约 4 GB。
+    # 这里从专门只放 CPU 轮子的索引装，并用 --no-deps：torch 的依赖（sympy/networkx 等）
+    # 交给后面装 lerobot 时从 pypi 镜像正常解析。
+    CPU_INDEXES=(
+        "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
+        "https://download.pytorch.org/whl/cpu"
+    )
+    CPU_OK=0
+    for idx in "${CPU_INDEXES[@]}"; do
+        info "尝试 $idx"
+        if probe "${idx}/torch/"; then
+            # 必须钉版本：CPU 索引里最新是 2.15，而 lerobot 要 torch<2.12。
+            # 不钉的话这里装 2.15，装 lerobot 时又会被判不满足、把 CUDA 版拉回来，白省。
+            if run "$PY_BIN" -m pip install "torch>=2.7,<2.12" "torchvision>=0.22,<0.27" \
+                    --index-url "$idx" --no-deps \
+                    --no-warn-script-location --disable-pip-version-check; then
+                CPU_OK=1
+                break
+            fi
+            warn "在这个源上装失败，换下一个"
+        else
+            info "  不通，换下一个"
+        fi
+    done
+
+    if [ "$CPU_OK" -eq 1 ]; then
+        if [ "$DRY_RUN" -eq 0 ]; then
+            tinfo="$("$PY_BIN" -c 'import torch;print(torch.__version__, torch.cuda.is_available())' 2>/dev/null || true)"
+            ok "CPU 版 torch 就位: $tinfo"
+        else
+            ok "（DryRun）会安装 CPU 版 torch"
+        fi
+    else
+        warn "CPU 索引都不可用，回退成 PyPI 默认（会带上 CUDA 依赖）"
+        info "也可以手动装： $PY_BIN -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu"
+    fi
+fi
 
 # ================================================================ 4. ffmpeg
 step "安装 ffmpeg（TorchCodec 解码视频用）"

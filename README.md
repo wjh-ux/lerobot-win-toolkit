@@ -106,21 +106,30 @@ Get-ChildItem .\*.ps1 | Unblock-File
 | 文件 | 作用 |
 |---|---|
 | `install-lerobot.sh` | 安装环境，同样的镜像降级与进度显示 |
+| `test-lerobot.sh` | 自检，软件组 + 硬件组（`--hw`） |
 
 ```bash
-chmod +x install-lerobot.sh
+chmod +x install-lerobot.sh test-lerobot.sh
 ./install-lerobot.sh --dry-run      # 先看计划
 ./install-lerobot.sh                # 正式安装
+./test-lerobot.sh                   # 装完自检
+./test-lerobot.sh --hw              # 连上机械臂后再查硬件
 ```
 
 常用参数：
 
 ```bash
 ./install-lerobot.sh --from-pypi              # 不走 git，从 pip 镜像取 sdist
+./install-lerobot.sh --cpu                    # 装 CPU 版 torch，省约 4 GB
 ./install-lerobot.sh --skip-apt               # 系统依赖已装好
 ./install-lerobot.sh --env myenv --extras core_scripts,feetech
 ./install-lerobot.sh --pypi-version 0.6.1     # 钉版本
 ```
+
+**关于 `--cpu`**：PyPI 的 Linux torch 轮子自带整套 CUDA 库（`nvidia-*`、`cuda-toolkit`），
+在没有 NVIDIA GPU 的机器上白占约 4 GB。加 `--cpu` 会先从国内镜像
+（上海交大 `mirror.sjtu.edu.cn/pytorch-wheels/cpu`，官方 `download.pytorch.org/whl/cpu` 兜底）
+装 `torch+torchvision` 的 CPU 轮子，再装 lerobot。
 
 与 Windows 版的差异：
 

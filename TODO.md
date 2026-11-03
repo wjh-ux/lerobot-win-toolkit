@@ -36,7 +36,9 @@
     --index-url https://download.pytorch.org/whl/cpu
 ```
 
-或者考虑给脚本加 `--cpu` 参数（还没做）。
+已提供 `--cpu` 参数：从上海交大镜像（`mirror.sjtu.edu.cn/pytorch-wheels/cpu`，官方源兜底）
+装 CPU 版 torch，**必须钉版本**（`torch==2.11.0+cpu` 这种）——不钉的话会装到
+torch 2.15，而 lerobot 要求 `<2.12`，装 lerobot 时又会被判不满足、把 CUDA 版拉回来。
 
 **ffmpeg 编码器**：conda-forge 的 ffmpeg **不带 libx264**（GPL 组件），实测
 `Unknown encoder 'libx264'`。但它带 `libsvtav1`（AV1）、`libopenh264`、`mpeg4`，
