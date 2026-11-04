@@ -184,7 +184,7 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 | `8` | 推理 / 跑策略 | ✅ | ✅ |
 | `9` | 回放数据集 | ✅ | ✅ |
 | `c` | 相机检测 | ✅ | ✅ |
-| `v` | 数据集可视化 | ✅ | ✅ |
+| `v` | 数据集工具（删/拆/合并/转视频） | ✅ | ✅ |
 | `i` | 环境详情 / 标定文件 | ✅ | ✅ |
 | `m` | HuggingFace 镜像 | ✅ | ✅ |
 | `h` | 命令速查 | ✅ | ✅ |
@@ -224,6 +224,30 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 
 还有 **`[c] 任意命令`**：列出环境里全部 `lerobot-*`，你敲命令名和参数，它负责调起来——
 这样即便以后上游加了新命令，也不用改脚本。
+
+### 数据集工具（`[v]`）
+
+对应 Seeed 的《SO-Arm 数据集工具》一文，全是 `lerobot-edit-dataset` 的不同 operation：
+
+| 键 | 操作 | 说明 |
+|---|---|---|
+| 1 | `delete_episodes` | 删除指定剧集，可只存成新数据集 |
+| 2 | `split` | 按比例或按剧集编号拆分 |
+| 3 | `merge` | 多个数据集合并成一个 |
+| 4 | `remove_feature` | 移除特征（如双摄只留腕部相机） |
+| 5 | `convert_image_to_video` | 图像转视频，省空间 |
+| 6 | `dataset-viz` | 本地可视化某个剧集 |
+| 7 | 在线可视化 | HuggingFace Space 网址 |
+| 8 | 上传 | `hf upload` / `huggingface-cli upload` |
+
+**参数命名有一处坑**：`lerobot-edit-dataset` 用**下划线** `--repo_id` / `--new_repo_id`，
+而 `lerobot-dataset-viz` 用**连字符** `--repo-id`。写反了命令不认。这一点我核对了
+lerobot 源码，之前脚本里给 edit-dataset 传 `--repo-id` 是错的，已修。
+
+**转视频的编码器默认改成 `libsvtav1`**：官方默认是 `h264`，但那需要 `libx264`，
+而 conda-forge 的 ffmpeg 不带（GPL 组件），直接用会 `Unknown encoder 'libx264'`。
+
+> 数据集是压缩存的，这些操作都比较慢，终端会有进度条；卡住就按一下回车刷新。
 
 ### 舵机调试工具（`[s]` 装 / `[o]` 开）
 
@@ -438,7 +462,7 @@ powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
 
    其他
     [c] 相机检测              lerobot-find-cameras
-    [v] 数据集可视化          lerobot-dataset-viz
+    [v] 数据集工具（删/拆/合并/转视频/可视化）
     [i] 环境详情 / 标定文件
     [m] 设置 HuggingFace 镜像
     [h] 命令速查              [q] 退出
@@ -615,6 +639,9 @@ Linux 侧另外两条：
 | 整段代码被插两遍 | 函数重复定义，ash -n 不报错 | 替换锚点 `# … 主菜单` 同时匹配到 `# … 主菜单动作`；要用带换行的唯一锚点，并复查定义个数 |
 | .sh 变成 CRLF | ash: syntax error near unexpected token $'{\r' | [System.IO.File]::WriteAllLines 在 Windows 上默认写 CRLF，整块替换会把全文转成 CRLF；写完必须量一遍 |
 | 版本排序装错版本 | 想装 0.6.1 却装了 0.4.1 | sort -V 排的是完整路径，路径里的哈希目录不同；要先按文件名排序 |
+| 菜单在 EOF 下死循环 | 管道喂输入时无限刷屏 | `read` 读到 EOF 返回空串，被当成"回车"，`[ -z "$k" ] && continue` 永远成立；要让 ask 返回非零并在主循环退出 |
+| 输入被默认值吃掉 | 填了名字却用了默认值 | 默认值写成了 `$(ds_ask_repo)_merged`，而那个函数内部会读一次 stdin；默认值只能用不读输入的函数 |
+| edit-dataset 参数不认 | 传 `--repo-id` 时报错 | 它要下划线 `--repo_id`；而 `lerobot-dataset-view` 用的是连字符 `--repo-id`，两者相反 |
 | conda 装完找不到 | 误判安装失败 | NSIS 静默安装会提前返回，要轮询等文件锁释放 |
 | 环境"借"用户级包 | 换账户就 `ModuleNotFoundError` | 系统里已有同版本 Python 时会启用 user site-packages，要设 `PYTHONNOUSERSITE=1` |
 | 进度条变问号 | `[██???]` | GBK 控制台撑不住 `░`，要逐字符探测编码 |

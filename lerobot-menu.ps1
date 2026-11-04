@@ -283,7 +283,7 @@ function Show-Menu {
     Write-Host ''
     Write-Host '   其他' -ForegroundColor DarkGray
     Write-Host '    [c] 相机检测              lerobot-find-cameras' -ForegroundColor White
-    Write-Host '    [v] 数据集可视化          lerobot-dataset-viz' -ForegroundColor White
+    Write-Host '    [v] 数据集工具（删/拆/合并/转视频/可视化）' -ForegroundColor White
     Write-Host '    [i] 环境详情 / 标定文件' -ForegroundColor White
     Write-Host '    [m] 设置 HuggingFace 镜像' -ForegroundColor White
     Write-Host '    [h] 命令速查              [q] 退出' -ForegroundColor White
@@ -691,6 +691,160 @@ function Action-Help {
     Write-Host '  在任意命令后加 --help 都能看到 --robot.type / --robot.port 这些参数' -ForegroundColor Gray
 }
 
+# ============================================================ 数据集工具
+# 对应 Seeed《SO-Arm 数据集工具》：全是 lerobot-edit-dataset 的不同 operation。
+# 参数命名注意：edit-dataset 用下划线 --repo_id / --new_repo_id；
+#               dataset-viz 用连字符 --repo-id。两者不能混。
+function Get-DatasetRepoDefault {
+    if ($env:HF_USER) { return "$env:HF_USER/so101_dataset" }
+    return 'so101_dataset'
+}
+
+function Read-DatasetRepo {
+    return (Read-Text '数据集 repo_id（用户/名字）' (Get-DatasetRepoDefault))
+}
+
+function Action-DatasetTool {
+    if (-not (Assert-Env)) { return }
+    while ($true) {
+        Clear-Host
+        Write-Host ''
+        Write-Host '  ====== 数据集工具（lerobot-edit-dataset）======' -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host '    [1] 删除剧集         delete_episodes' -ForegroundColor White
+        Write-Host '    [2] 拆分数据集       split' -ForegroundColor White
+        Write-Host '    [3] 合并数据集       merge' -ForegroundColor White
+        Write-Host '    [4] 移除特征         remove_feature（如去掉桌面相机）' -ForegroundColor White
+        Write-Host '    [5] 图像转视频       convert_image_to_video（省空间）' -ForegroundColor White
+        Write-Host '    [6] 可视化（本地）   lerobot-dataset-viz' -ForegroundColor White
+        Write-Host '    [7] 在线可视化       HuggingFace Space（打印网址）' -ForegroundColor White
+        Write-Host '    [8] 上传到 HuggingFace' -ForegroundColor White
+        Write-Host ''
+        Write-Host '    [0] 返回' -ForegroundColor White
+        Write-Host ''
+        Write-Host '  提示：新版数据集是压缩存的，操作比较慢，终端会有进度条；卡住就按回车刷一下。' -ForegroundColor DarkGray
+
+        $k = Read-Key '请输入'
+        $ds = ''; $idx = ''; $newid = ''
+        switch ($k) {
+            '1' {
+                Write-Host ''
+                Write-Host '=== 删除剧集 ===' -ForegroundColor Cyan
+                $ds = Read-DatasetRepo
+                if (-not $ds) { break }
+                $idx = Read-Text '要删哪些剧集（逗号分隔，如 0,2,5）' ''
+                if (-not $idx) { Write-Host '  没填剧集号' -ForegroundColor Yellow; break }
+                Write-Host ''
+                Write-Host '    [1] 直接改原数据集' -ForegroundColor White
+                Write-Host '    [2] 存成新数据集（不动原数据，推荐）' -ForegroundColor White
+                $mode = Read-Text '选择' '2'
+                $a = @("--repo_id=$ds", '--operation.type=delete_episodes', "--operation.episode_indices=[$idx]")
+                if ($mode -eq '2') {
+                    $newid = Read-Text '新数据集 repo_id' "$($ds)_deleted"
+                    $a += "--new_repo_id=$newid"
+                }
+                Invoke-Lerobot 'lerobot-edit-dataset' $a
+            }
+            '2' {
+                Write-Host ''
+                Write-Host '=== 拆分数据集 ===' -ForegroundColor Cyan
+                $ds = Read-DatasetRepo
+                if (-not $ds) { break }
+                Write-Host '    [1] 按比例拆（如 8:2）' -ForegroundColor White
+                Write-Host '    [2] 按剧集编号拆' -ForegroundColor White
+                $how = Read-Text '选择' '1'
+                if ($how -eq '2') {
+                    $splits = Read-Text '按剧集编号，JSON 形如 {"task1":[0,1,2],"task2":[3,4]}' ''
+                } else {
+                    $splits = Read-Text '按比例，JSON 形如 {"train":0.8,"val":0.2}' '{"train":0.8,"val":0.2}'
+                }
+                if (-not $splits) { Write-Host '  没填拆分规则' -ForegroundColor Yellow; break }
+                Invoke-Lerobot 'lerobot-edit-dataset' @("--repo_id=$ds", '--operation.type=split', "--operation.splits=$splits")
+            }
+            '3' {
+                Write-Host ''
+                Write-Host '=== 合并数据集 ===' -ForegroundColor Cyan
+                $srcs = Read-Text '要合并哪些（JSON 列表，形如 ["用户/a","用户/b"]）' ''
+                if (-not $srcs) { Write-Host '  没填源数据集' -ForegroundColor Yellow; break }
+                $newid = Read-Text '合并后的新 repo_id' "$(Get-DatasetRepoDefault)_merged"
+                Invoke-Lerobot 'lerobot-edit-dataset' @("--repo_id=$newid", '--operation.type=merge', "--operation.repo_ids=$srcs")
+            }
+            '4' {
+                Write-Host ''
+                Write-Host '=== 移除特征 ===' -ForegroundColor Cyan
+                $ds = Read-DatasetRepo
+                if (-not $ds) { break }
+                Write-Host '  典型用途：双相机录的，只想留腕部相机 → 删掉 observation.images.top' -ForegroundColor DarkGray
+                $feats = Read-Text '要删哪些特征（JSON 列表）' '["observation.images.top"]'
+                if (-not $feats) { Write-Host '  没填特征名' -ForegroundColor Yellow; break }
+                Write-Host '    [1] 直接改原数据集' -ForegroundColor White
+                Write-Host '    [2] 存成新数据集（推荐）' -ForegroundColor White
+                $m2 = Read-Text '选择' '2'
+                $a2 = @("--repo_id=$ds", '--operation.type=remove_feature', "--operation.feature_names=$feats")
+                if ($m2 -eq '2') {
+                    $newid = Read-Text '新数据集 repo_id' "$($ds)_onecam"
+                    $a2 += "--new_repo_id=$newid"
+                }
+                Invoke-Lerobot 'lerobot-edit-dataset' $a2
+            }
+            '5' {
+                Write-Host ''
+                Write-Host '=== 图像转视频 ===' -ForegroundColor Cyan
+                $ds = Read-DatasetRepo
+                if (-not $ds) { break }
+                $out = Read-Text '输出目录（留空=默认）' ''
+                # 官方默认 h264，但那需要 libx264；conda-forge 的 ffmpeg 没带，
+                # 所以默认 libsvtav1，避免一跑就 Unknown encoder 'libx264'
+                $vcodec = Read-Text '编码器（libsvtav1 / h264 / hevc）' 'libsvtav1'
+                $crf = Read-Text '画质 crf（越小越清晰，默认 30）' '30'
+                $a3 = @("--repo_id=$ds", '--operation.type=convert_image_to_video',
+                        "--operation.vcodec=$vcodec", "--operation.crf=$crf")
+                if ($out) { $a3 += "--operation.output_dir=$out" }
+                Invoke-Lerobot 'lerobot-edit-dataset' $a3
+            }
+            '6' {
+                Write-Host ''
+                Write-Host '=== 本地可视化 ===' -ForegroundColor Cyan
+                $ds = Read-DatasetRepo
+                if (-not $ds) { break }
+                $ep = Read-Text '剧集号' '0'
+                $root = Read-Text '本地目录 root（云端数据集留空）' ''
+                $a4 = @("--repo-id=$ds", "--episode-index=$ep")
+                if ($root) { $a4 += @("--root=$root", '--mode=local') }
+                Invoke-Lerobot 'lerobot-dataset-viz' $a4
+            }
+            '7' {
+                Write-Host ''
+                Write-Host '=== 在线可视化 ===' -ForegroundColor Cyan
+                Write-Host '  https://huggingface.co/spaces/lerobot/visualize_dataset' -ForegroundColor Cyan
+                Write-Host '  把数据集 repo_id 填进去即可，不用本地环境' -ForegroundColor Gray
+            }
+            '8' {
+                Write-Host ''
+                Write-Host '=== 上传到 HuggingFace ===' -ForegroundColor Cyan
+                $ds = Read-DatasetRepo
+                if (-not $ds) { break }
+                $defDir = Join-Path (Join-Path $HOME '.cache\huggingface\lerobot') $ds
+                $dir = Read-Text '本地目录（留空=默认缓存目录）' $defDir
+                $hf = Join-Path $script:ScriptsDir 'hf.exe'
+                $cli = Join-Path $script:ScriptsDir 'huggingface-cli.exe'
+                if (Test-Path -LiteralPath $hf) {
+                    & $hf upload $ds $dir
+                } elseif (Test-Path -LiteralPath $cli) {
+                    & $cli upload $ds $dir
+                } else {
+                    Write-Host '  环境里没有 hf / huggingface-cli' -ForegroundColor Yellow
+                    Write-Host "  手动： $($script:PyExe) -m pip install -U huggingface_hub" -ForegroundColor Gray
+                }
+            }
+            '0' { return }
+            '' { return }
+            default { Write-Host '  没有这个选项' -ForegroundColor Yellow; Start-Sleep -Milliseconds 600; continue }
+        }
+        Pause-Menu
+    }
+}
+
 # ============================================================ 舵机调试工具
 # Seeed 的图形化舵机调试工具（Seeed_RoboController）
 # 三个坑，Wiki 没写清：
@@ -888,7 +1042,7 @@ function Action-Advanced {
         Write-Host '    [4] lerobot-imgtransform-viz  图像变换可视化' -ForegroundColor White
         Write-Host '    [5] lerobot-eval              评估策略' -ForegroundColor White
         Write-Host '    [6] lerobot-annotate          数据标注' -ForegroundColor White
-        Write-Host '    [7] lerobot-edit-dataset      数据集编辑（删回合/合并/改特征）' -ForegroundColor White
+        Write-Host '    [7] lerobot-edit-dataset      数据集工具（删/拆/合并/转视频）' -ForegroundColor White
         Write-Host '    [8] lerobot-train-tokenizer   训练 VLA tokenizer' -ForegroundColor White
         Write-Host '    [9] lerobot-setup-can         Damiao CAN 总线初始化' -ForegroundColor White
         Write-Host ''
@@ -933,11 +1087,8 @@ function Action-Advanced {
             }
             '7' {
                 if (-not (Assert-Env)) { break }
-                $ds = Read-Text '数据集 repo_id' $(if ($env:HF_USER) { "$env:HF_USER/so101_dataset" } else { 'so101_dataset' })
-                Write-Host '  常见操作： delete_episodes / merge_datasets / add_features' -ForegroundColor Gray
-                $op = Read-Text '操作类型（留空看帮助）' ''
-                if ($op) { Invoke-Lerobot 'lerobot-edit-dataset' @("--repo-id=$ds", "--operation.type=$op") }
-                else { Invoke-Lerobot 'lerobot-edit-dataset' @('--help') }
+                Action-DatasetTool
+                break
             }
             '8' {
                 if (-not (Assert-Env)) { break }
@@ -1021,7 +1172,7 @@ function Invoke-MenuItem([string]$key) {
         '8' { Action-Rollout }
         '9' { Action-Replay }
         'c' { Action-Cameras }
-        'v' { Action-Viz }
+        'v' { Action-DatasetTool; return }
         'i' { Action-Info }
         'm' { Action-Mirror }
         'h' { Action-Help }

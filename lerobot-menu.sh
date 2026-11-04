@@ -37,7 +37,12 @@ ask() {
     printf '  %s%s%s ' "$C_Y" "$prompt" "$C_0" >&2
     [ -n "$def" ] && printf '[%s] ' "$def" >&2
     local ans
-    read -r ans || ans=""
+    if ! read -r ans; then
+        # 输入结束（EOF，比如被管道/自动化调用）：
+        # 返回非零让主循环能识别并退出，否则空输入会被当成"回车"，无限刷菜单。
+        printf '%s' "$def"
+        return 1
+    fi
     [ -z "$ans" ] && ans="$def"
     printf '%s' "$ans"
 }
@@ -709,6 +714,138 @@ action_help() {
     printf '\n  查某个命令的参数： lerobot-<命令> --help\n'
 }
 
+# ---------------------------------------------------------------- 数据集工具
+# 对应 Seeed 的《SO-Arm 数据集工具》一文，全部是 lerobot-edit-dataset 的不同 operation。
+# 注意参数命名：edit-dataset 用下划线 --repo_id / --new_repo_id，
+#               dataset-viz 用连字符 --repo-id，两者不能混。
+ds_repo_default() { printf '%s' "${HF_USER:+$HF_USER/}so101_dataset"; }
+
+ds_ask_repo() {
+    local def; def=$(ds_repo_default)
+    ask "数据集 repo_id（用户/名字）" "$def"
+}
+
+action_dataset_tool() {
+    if ! need_env; then return 1; fi
+    while true; do
+        clear 2>/dev/null || true
+        printf '\n  %s====== 数据集工具（lerobot-edit-dataset）======%s\n\n' "$C_C" "$C_0"
+        printf '    [1] 删除剧集         delete_episodes\n'
+        printf '    [2] 拆分数据集       split\n'
+        printf '    [3] 合并数据集       merge\n'
+        printf '    [4] 移除特征         remove_feature（如去掉桌面相机）\n'
+        printf '    [5] 图像转视频       convert_image_to_video（省空间）\n'
+        printf '    [6] 可视化（本地）   lerobot-dataset-viz\n'
+        printf '    [7] 在线可视化       HuggingFace Space（只打印网址）\n'
+        printf '    [8] 上传到 HuggingFace\n'
+        printf '\n    [0] 返回\n\n'
+        printf '  %s提示：新版数据集是压缩存的，操作比较慢，终端会有进度条；卡住就按回车刷一下。%s\n' "$C_D" "$C_0"
+
+        local k; k=$(ask "请输入")
+        local ds idx newid
+        case "$k" in
+            1)
+                section "删除剧集"
+                ds=$(ds_ask_repo); [ -z "$ds" ] && { pause_menu; continue; }
+                idx=$(ask "要删哪些剧集（逗号分隔，如 0,2,5）" "")
+                [ -z "$idx" ] && { warn "没填剧集号"; pause_menu; continue; }
+                printf '\n  [1] 直接改原数据集\n  [2] 存成新数据集（不动原数据，推荐）\n'
+                local mode; mode=$(ask "选择" "2")
+                local args=("--repo_id=$ds" "--operation.type=delete_episodes" "--operation.episode_indices=[$idx]")
+                if [ "$mode" = "2" ]; then
+                    newid=$(ask "新数据集 repo_id" "${ds}_deleted")
+                    args+=("--new_repo_id=$newid")
+                fi
+                lerobot_cmd lerobot-edit-dataset "${args[@]}"
+                ;;
+            2)
+                section "拆分数据集"
+                ds=$(ds_ask_repo); [ -z "$ds" ] && { pause_menu; continue; }
+                printf '\n  [1] 按比例拆（如 8:1:1）\n  [2] 按剧集编号拆\n'
+                local how; how=$(ask "选择" "1")
+                local splits
+                if [ "$how" = "2" ]; then
+                    splits=$(ask '按剧集编号，JSON 形如 {"task1":[0,1,2],"task2":[3,4]}' '')
+                else
+                    splits=$(ask '按比例，JSON 形如 {"train":0.8,"val":0.2}' '{"train":0.8,"val":0.2}')
+                fi
+                [ -z "$splits" ] && { warn "没填拆分规则"; pause_menu; continue; }
+                lerobot_cmd lerobot-edit-dataset "--repo_id=$ds" "--operation.type=split" "--operation.splits=$splits"
+                ;;
+            3)
+                section "合并数据集"
+                local srcs
+                srcs=$(ask '要合并哪些（JSON 列表，形如 ["用户/a","用户/b"]）' '')
+                [ -z "$srcs" ] && { warn "没填源数据集"; pause_menu; continue; }
+                newid=$(ask "合并后的新 repo_id" "$(ds_repo_default)_merged")
+                lerobot_cmd lerobot-edit-dataset "--repo_id=$newid" "--operation.type=merge" "--operation.repo_ids=$srcs"
+                ;;
+            4)
+                section "移除特征"
+                ds=$(ds_ask_repo); [ -z "$ds" ] && { pause_menu; continue; }
+                info "典型用途：双相机录的，只想留腕部相机 → 删掉 observation.images.top"
+                local feats
+                feats=$(ask '要删哪些特征（JSON 列表，形如 ["observation.images.top"]）' '["observation.images.top"]')
+                [ -z "$feats" ] && { warn "没填特征名"; pause_menu; continue; }
+                printf '\n  [1] 直接改原数据集\n  [2] 存成新数据集（推荐）\n'
+                local m2; m2=$(ask "选择" "2")
+                local a2=("--repo_id=$ds" "--operation.type=remove_feature" "--operation.feature_names=$feats")
+                if [ "$m2" = "2" ]; then
+                    newid=$(ask "新数据集 repo_id" "${ds}_onecam")
+                    a2+=("--new_repo_id=$newid")
+                fi
+                lerobot_cmd lerobot-edit-dataset "${a2[@]}"
+                ;;
+            5)
+                section "图像转视频"
+                ds=$(ds_ask_repo); [ -z "$ds" ] && { pause_menu; continue; }
+                local out vcodec crf
+                out=$(ask "输出目录（留空=默认）" "")
+                # 官方默认 h264，但那需要 libx264；conda-forge 的 ffmpeg 没带（GPL），
+                # 所以这里默认 libsvtav1，避免一跑就 Unknown encoder 'libx264'
+                vcodec=$(ask "编码器（libsvtav1 / h264 / hevc）" "libsvtav1")
+                crf=$(ask "画质 crf（越小越清晰，默认 30）" "30")
+                local a3=("--repo_id=$ds" "--operation.type=convert_image_to_video"
+                          "--operation.vcodec=$vcodec" "--operation.crf=$crf")
+                [ -n "$out" ] && a3+=("--operation.output_dir=$out")
+                lerobot_cmd lerobot-edit-dataset "${a3[@]}"
+                ;;
+            6)
+                section "本地可视化"
+                ds=$(ds_ask_repo); [ -z "$ds" ] && { pause_menu; continue; }
+                local ep root; ep=$(ask "剧集号" "0")
+                root=$(ask "本地目录 root（云端数据集留空）" "")
+                local a4=("--repo-id=$ds" "--episode-index=$ep")
+                if [ -n "$root" ]; then
+                    a4+=("--root=$root" "--mode=local")
+                fi
+                lerobot_cmd lerobot-dataset-viz "${a4[@]}"
+                ;;
+            7)
+                section "在线可视化"
+                info "https://huggingface.co/spaces/lerobot/visualize_dataset"
+                info "把数据集 repo_id 填进去即可，不用本地环境"
+                ;;
+            8)
+                section "上传到 HuggingFace"
+                ds=$(ds_ask_repo); [ -z "$ds" ] && { pause_menu; continue; }
+                local dir; dir=$(ask "本地目录（留空=默认缓存目录）" "")
+                if [ -x "${ENV_PREFIX}/bin/hf" ]; then
+                    run "${ENV_PREFIX}/bin/hf" upload "$ds" ${dir:-$HOME/.cache/huggingface/lerobot/$ds}
+                elif [ -x "${ENV_PREFIX}/bin/huggingface-cli" ]; then
+                    run "${ENV_PREFIX}/bin/huggingface-cli" upload "$ds" ${dir:-$HOME/.cache/huggingface/lerobot/$ds}
+                else
+                    warn "环境里没有 hf / huggingface-cli"
+                    info "手动： $PY_BIN -m pip install -U huggingface_hub"
+                fi
+                ;;
+            0|"") return ;;
+            *) warn "没有这个选项"; sleep 1; continue ;;
+        esac
+        pause_menu
+    done
+}
+
 # ---------------------------------------------------------------- 舵机调试工具
 # Seeed 的图形化舵机调试工具（Seeed_RoboController）
 # 注意三个坑，Wiki 上没写清楚：
@@ -961,14 +1098,8 @@ action_advanced() {
                 lerobot_cmd lerobot-annotate "--repo-id=$ds3"
                 ;;
             7)
-                local ds4; ds4=$(ask "数据集 repo_id" "${HF_USER:+$HF_USER/}so101_dataset")
-                info "常见操作： delete_episodes / merge_datasets / add_features"
-                local op; op=$(ask "操作类型（留空看帮助）" "")
-                if [ -n "$op" ]; then
-                    lerobot_cmd lerobot-edit-dataset "--repo-id=$ds4" "--operation.type=$op"
-                else
-                    lerobot_cmd lerobot-edit-dataset "--help"
-                fi
+                action_dataset_tool
+                continue
                 ;;
             8)
                 local ds5; ds5=$(ask "数据集 repo_id" "${HF_USER:+$HF_USER/}so101_dataset")
@@ -1055,7 +1186,7 @@ show_menu() {
     printf '\n   日常使用\n'
     printf '    [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放\n'
     printf '\n   其他\n'
-    printf '    [c] 相机检测   [i] 环境详情   [m] HF 镜像   [h] 命令速查   [q] 退出\n'
+    printf '    [c] 相机检测   [v] 数据集工具   [i] 环境详情   [m] HF 镜像   [h] 命令速查   [q] 退出\n'
     printf '    [t] 打开 LeRobot 终端（环境已激活，可自由敲命令）\n'
     printf '    [x] 高级选项（其余 8 个命令）\n\n'
 }
@@ -1078,7 +1209,7 @@ dispatch() {
         8) action_rollout ;;
         9) action_replay ;;
         c|C) action_cameras ;;
-        v|V) info "数据集可视化：lerobot-dataset-viz --help" ;;
+        v|V) action_dataset_tool; return ;;
         i|I) action_info ;;
         m|M) action_mirror ;;
         h|H) action_help ;;
@@ -1110,7 +1241,12 @@ fi
 while true; do
     show_menu
     k=$(ask "请输入")
+    # ask 在读到 EOF 时返回非零；此时不要再空转
+    if [ $? -ne 0 ]; then
+        printf '\n  输入结束，退出。\n\n'
+        exit 0
+    fi
     [ -z "$k" ] && continue
-    dispatch "$k"
+    dispatch "$k" || true
     pause_menu
 done
