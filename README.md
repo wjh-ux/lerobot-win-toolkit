@@ -152,6 +152,7 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 
    机械臂准备（按顺序做一次）
     [2] 查找串口    [3] 设置电机 ID    [4] 标定机械臂    [r] 校准管理
+    [s] 舵机调试工具（Seeed 图形界面）
 
    日常使用
     [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放
@@ -175,6 +176,7 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 | `3` | 设置电机 ID | ✅ | ✅ |
 | `4` | 标定机械臂 | ✅ | ✅ |
 | `r` | 校准管理（删除 / 重标定） | ✅ | ✅ |
+| `s` | 舵机调试工具（Seeed GUI） | ✅ | ✅ |
 | `5` | 遥操作 | ✅ | ✅ |
 | `6` | 录制数据集 | ✅ | ✅ |
 | `7` | 训练策略 | ✅ | ✅ |
@@ -221,6 +223,33 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 
 还有 **`[c] 任意命令`**：列出环境里全部 `lerobot-*`，你敲命令名和参数，它负责调起来——
 这样即便以后上游加了新命令，也不用改脚本。
+
+### 舵机调试工具（`[s]`）
+
+[Seeed 的图形化舵机调试工具](https://wiki.seeedstudio.com/cn/lerobot_steering_gear_debugging_tool/)
+（`Seeed_RoboController`），能查 1–6 号舵机是否在线、改 ID、写中位值、单舵机拖动测试、
+看电压/温度/负载/电流、读写寄存器、改波特率、恢复出厂。
+
+菜单里 `[s]` 可以安装、环境检查、启动、卸载。
+
+**照 Wiki 直接 clone 会拿错东西**——这个工具在 `factory` 分支上，而仓库默认分支
+`master` 是另一个 Web 项目（`seeed_robocore_studio.html`）。所以脚本里固定用：
+
+```bash
+git clone --depth 1 -b factory https://github.com/Seeed-Projects/Seeed_RoboController.git
+```
+
+几个实测细节：
+
+| 项 | 说明 |
+|---|---|
+| 依赖 | 只有 **PySide6** + **pyserial**（不是 Wiki 说的 `requirements.txt` 一长串） |
+| 舵机 SDK | 仓库自带 `scservo_sdk`，不用另装 |
+| 体积 | 代码约 0.5 MB，PySide6 约 200 MB |
+| 图形环境 | Qt 界面，**必须有桌面**；无 `DISPLAY` 时脚本会拒绝启动并给替代方案 |
+
+Linux 没有桌面时（比如纯 SSH），脚本会提示两条路：`ssh -X` 转发图形，或直接用本菜单的
+`[2] 找串口` + `[4] 标定机械臂`——单纯验证舵机在线状态够用了。
 
 ### 校准管理（`[r]`）
 
@@ -395,6 +424,7 @@ powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
     [3] 设置电机 ID           lerobot-setup-motors
     [4] 标定机械臂            lerobot-calibrate
     [r] 校准管理（删除/重标定）
+    [s] 舵机调试工具          Seeed 图形界面
 
    日常使用
     [5] 遥操作                lerobot-teleoperate

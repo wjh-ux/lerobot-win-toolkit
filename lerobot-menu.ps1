@@ -271,6 +271,7 @@ function Show-Menu {
     Write-Host '    [3] 设置电机 ID           lerobot-setup-motors' -ForegroundColor White
     Write-Host '    [4] 标定机械臂            lerobot-calibrate' -ForegroundColor White
     Write-Host '    [r] 校准管理（删除/重标定）' -ForegroundColor White
+    Write-Host '    [s] 舵机调试工具（Seeed 图形界面，查 ID/中位/单测）' -ForegroundColor White
     Write-Host ''
     Write-Host '   日常使用' -ForegroundColor DarkGray
     Write-Host '    [5] 遥操作                lerobot-teleoperate' -ForegroundColor White
@@ -689,6 +690,163 @@ function Action-Help {
     Write-Host '  在任意命令后加 --help 都能看到 --robot.type / --robot.port 这些参数' -ForegroundColor Gray
 }
 
+# ============================================================ 舵机调试工具
+# Seeed 的图形化舵机调试工具（Seeed_RoboController）
+# 三个坑，Wiki 没写清：
+#   1) 工具在 factory 分支；默认分支 master 是另一个 Web 版，直接 clone 会拿错
+#   2) 依赖只有 PySide6 + pyserial
+#   3) 界面是 Qt（PySide6），需要图形环境
+$script:ServoToolDir = Join-Path $HOME 'Seeed_RoboController'
+$script:ServoToolBranch = 'factory'
+$script:ServoToolUrl = 'https://github.com/Seeed-Projects/Seeed_RoboController.git'
+
+function Test-ServoToolInstalled {
+    return (Test-Path -LiteralPath (Join-Path $script:ServoToolDir 'src\gui\factory_calibration_tool.py'))
+}
+
+function Install-ServoTool {
+    if (-not (Assert-Env)) { return }
+
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Host '  需要 git 才能拉取工具源码' -ForegroundColor Red
+        Write-Host '  装好 git 后重来；或者先用 [0] 安装环境，那边会处理依赖' -ForegroundColor Gray
+        return
+    }
+
+    $urls = @(
+        ('https://gh-proxy.com/' + $script:ServoToolUrl),
+        ('https://ghfast.top/' + $script:ServoToolUrl),
+        $script:ServoToolUrl
+    )
+
+    if (Test-Path -LiteralPath (Join-Path $script:ServoToolDir '.git')) {
+        Write-Host '  已存在，尝试更新' -ForegroundColor Gray
+        Push-Location $script:ServoToolDir
+        try {
+            & git fetch --depth 1 origin $script:ServoToolBranch 2>&1 | Out-Null
+            & git checkout $script:ServoToolBranch 2>&1 | Out-Null
+            & git pull --ff-only 2>&1 | Out-Null
+        } catch { Write-Host '  更新失败，继续用现有代码' -ForegroundColor Yellow }
+        finally { Pop-Location }
+    } else {
+        if (Test-Path -LiteralPath $script:ServoToolDir) {
+            Write-Host "  $($script:ServoToolDir) 已存在但不是 git 仓库，先删掉或用 [4] 卸载" -ForegroundColor Yellow
+            return
+        }
+        $done = $false
+        foreach ($u in $urls) {
+            Write-Host "  尝试 $u" -ForegroundColor Gray
+            # -b factory 是关键，否则默认分支 master 是另一个项目
+            & git clone --depth 1 -b $script:ServoToolBranch $u $script:ServoToolDir 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $done = $true; break }
+            Write-Host '  失败，换下一个源' -ForegroundColor Yellow
+            Remove-Item -LiteralPath $script:ServoToolDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if (-not $done) {
+            Write-Host '  拉不下来（检查网络，或手动 git clone -b factory）' -ForegroundColor Red
+            return
+        }
+    }
+
+    if (-not (Test-ServoToolInstalled)) {
+        Write-Host '  克隆成功但没找到入口脚本' -ForegroundColor Yellow
+        Write-Host '  确认分支是不是 factory；master 分支是另一个项目' -ForegroundColor Gray
+        return
+    }
+    Write-Host "  代码就位：$($script:ServoToolDir)（分支 $script:ServoToolBranch）" -ForegroundColor Green
+
+    Write-Host '  安装依赖 PySide6（约 200 MB）...' -ForegroundColor Gray
+    & $script:PyExe -m pip install 'PySide6>=6.0.0' 'pyserial>=3.5' --no-warn-script-location
+    if ($LASTEXITCODE -eq 0) { Write-Host '  依赖安装完成' -ForegroundColor Green }
+    else { Write-Host '  依赖安装失败，可手动： python -m pip install PySide6 pyserial' -ForegroundColor Red }
+}
+
+function Invoke-ServoToolCheck {
+    if (-not (Assert-Env)) { return }
+    if (-not (Test-ServoToolInstalled)) { Write-Host '  还没安装，先用 [1]' -ForegroundColor Yellow; return }
+    Push-Location $script:ServoToolDir
+    try { & $script:PyExe 'setup.py' } finally { Pop-Location }
+}
+
+function Start-ServoTool {
+    if (-not (Assert-Env)) { return }
+    if (-not (Test-ServoToolInstalled)) { Write-Host '  还没安装，先用 [1]' -ForegroundColor Yellow; return }
+
+    & $script:PyExe -c 'import PySide6' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '  环境里没有 PySide6，先跑 [1] 安装' -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host '  启动中，界面会单独弹出（关闭窗口即退出）' -ForegroundColor Gray
+    Write-Host '  串口被占用时可手动指定： --port1 COM3 --port2 COM4' -ForegroundColor Gray
+    Push-Location $script:ServoToolDir
+    try {
+        & $script:PyExe -m src.gui.factory_calibration_tool
+    } finally { Pop-Location }
+}
+
+function Remove-ServoTool {
+    if (-not (Test-Path -LiteralPath $script:ServoToolDir)) {
+        Write-Host '  没装，无需卸载' -ForegroundColor Gray
+        return
+    }
+    Write-Host "  将删除目录：$($script:ServoToolDir)" -ForegroundColor Yellow
+    Write-Host '  （PySide6 不删，可能被别的程序用着）' -ForegroundColor Gray
+    if ((Read-Text '确认删除？(y/N)' 'n') -notmatch '^[yY]') { Write-Host '  已取消' -ForegroundColor Gray; return }
+    try {
+        Remove-Item -LiteralPath $script:ServoToolDir -Recurse -Force -ErrorAction Stop
+        Write-Host '  已删除' -ForegroundColor Green
+    } catch { Write-Host "  删除失败：$($_.Exception.Message)" -ForegroundColor Red }
+}
+
+function Action-ServoTool {
+    while ($true) {
+        Clear-Host
+        Write-Host ''
+        Write-Host '  ====== 舵机调试工具（Seeed_RoboController）======' -ForegroundColor Cyan
+        Write-Host ''
+        if (Test-ServoToolInstalled) {
+            Write-Host "  状态：已安装  $($script:ServoToolDir)" -ForegroundColor Green
+        } else {
+            Write-Host '  状态：未安装' -ForegroundColor DarkGray
+        }
+        Write-Host ''
+        Write-Host '    [1] 安装 / 更新' -ForegroundColor White
+        Write-Host '    [2] 环境检查' -ForegroundColor White
+        Write-Host '    [3] 启动图形界面' -ForegroundColor White
+        Write-Host '    [4] 卸载' -ForegroundColor White
+        Write-Host '    [5] 官方说明（网址）' -ForegroundColor White
+        Write-Host '    [0] 返回' -ForegroundColor White
+        Write-Host ''
+
+        $k = Read-Key '请输入'
+        switch ($k) {
+            '1' { Install-ServoTool }
+            '2' { Invoke-ServoToolCheck }
+            '3' { Start-ServoTool }
+            '4' { Remove-ServoTool }
+            '5' {
+                Write-Host ''
+                Write-Host '  https://wiki.seeedstudio.com/cn/lerobot_steering_gear_debugging_tool/' -ForegroundColor Cyan
+                Write-Host ''
+                Write-Host '  能做什么：' -ForegroundColor White
+                Write-Host '    - 检测 1-6 号舵机是否都在线' -ForegroundColor Gray
+                Write-Host '    - 改舵机 ID（ID 重复时只能一个个拆下来重刷）' -ForegroundColor Gray
+                Write-Host '    - 写中位值（把当前位置当零点烧进去）' -ForegroundColor Gray
+                Write-Host '    - 单个舵机拖进度条测试、看电压/温度/负载/电流' -ForegroundColor Gray
+                Write-Host '    - 读写寄存器、改波特率、恢复出厂' -ForegroundColor Gray
+                Write-Host ''
+                Write-Host '  注意：工具在 factory 分支，master 分支是另一个 Web 项目。' -ForegroundColor Yellow
+            }
+            '0' { return }
+            ''  { return }
+            default { Write-Host '  没有这个选项' -ForegroundColor Yellow; Start-Sleep -Milliseconds 600 }
+        }
+        Pause-Menu
+    }
+}
+
 # ============================================================ 高级选项
 function Action-Advanced {
     while ($true) {
@@ -822,6 +980,7 @@ function Invoke-MenuItem([string]$key) {
         '3' { Action-SetupMotors }
         '4' { Action-Calibrate }
         'r' { Action-CalibrationManager }
+        's' { Action-ServoTool; return }
         '5' { Action-Teleoperate }
         '6' { Action-Record }
         '7' { Action-Train }

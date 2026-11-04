@@ -709,6 +709,180 @@ action_help() {
     printf '\n  查某个命令的参数： lerobot-<命令> --help\n'
 }
 
+# ---------------------------------------------------------------- 舵机调试工具
+# Seeed 的图形化舵机调试工具（Seeed_RoboController）
+# 注意三个坑，Wiki 上没写清楚：
+#   1) 工具在 factory 分支上；默认分支 master 是另一个 Web 版，直接 clone 会拿错东西
+#   2) 依赖只有 PySide6 + pyserial，pyserial 环境里通常已有
+#   3) 界面是 Qt 的，没有桌面环境（DISPLAY/WAYLAND_DISPLAY）跑不起来
+SERVO_TOOL_DIR="${HOME}/Seeed_RoboController"
+SERVO_TOOL_BRANCH="factory"
+SERVO_TOOL_URL="https://github.com/Seeed-Projects/Seeed_RoboController.git"
+
+servo_tool_installed() { [ -d "${SERVO_TOOL_DIR}/.git" ] && [ -f "${SERVO_TOOL_DIR}/src/gui/factory_calibration_tool.py" ]; }
+
+servo_tool_install() {
+    need_env || return 1
+    section "安装舵机调试工具"
+
+    if ! command -v git >/dev/null 2>&1; then
+        err "需要 git 才能拉取工具源码"
+        info "sudo apt install -y git"
+        info "或者先跑 [0] 安装环境，那边会把 git 一起装上"
+        return 1
+    fi
+
+    if [ -d "$SERVO_TOOL_DIR" ] && [ ! -d "${SERVO_TOOL_DIR}/.git" ]; then
+        warn "$SERVO_TOOL_DIR 已存在但不是 git 仓库"
+        info "先删除或用 [4] 卸载后再装"
+        return 1
+    fi
+
+    if [ -d "${SERVO_TOOL_DIR}/.git" ]; then
+        info "已存在，尝试更新"
+        run git -C "$SERVO_TOOL_DIR" fetch --depth 1 origin "$SERVO_TOOL_BRANCH" || warn "拉取失败，继续用现有代码"
+        run git -C "$SERVO_TOOL_DIR" checkout "$SERVO_TOOL_BRANCH" || true
+        run git -C "$SERVO_TOOL_DIR" pull --ff-only || warn "更新失败，继续用现有代码"
+    else
+        local ok=0 u
+        for u in \
+            "https://gh-proxy.com/https://github.com/Seeed-Projects/Seeed_RoboController.git" \
+            "https://ghfast.top/https://github.com/Seeed-Projects/Seeed_RoboController.git" \
+            "$SERVO_TOOL_URL"
+        do
+            info "尝试 $u"
+            # 关键是 -b factory，否则默认分支是 master（另一个 Web 项目）
+            if run git clone --depth 1 -b "$SERVO_TOOL_BRANCH" "$u" "$SERVO_TOOL_DIR"; then
+                ok=1; break
+            fi
+            warn "失败，换下一个源"
+            rm -rf "$SERVO_TOOL_DIR"
+        done
+        if [ "$ok" -eq 0 ]; then
+            err "拉不下来（检查网络，或手动 git clone -b factory）"
+            return 1
+        fi
+    fi
+
+    if [ ! -f "${SERVO_TOOL_DIR}/src/gui/factory_calibration_tool.py" ]; then
+        warn "克隆成功但没找到入口脚本"
+        info "确认分支是不是 factory；master 分支是另一个项目"
+        return 1
+    fi
+    ok "代码就位：$SERVO_TOOL_DIR（分支 $SERVO_TOOL_BRANCH）"
+
+    info "安装依赖 PySide6（约 200 MB，慢一点）"
+    # 注意：PIP_MIRRORS 定义在 install-lerobot.sh 里，本脚本没有这个数组，
+    # 直接引用会因 set -u 报未定义。这里用本地列表。
+    local mirrors=(
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+        "https://mirrors.aliyun.com/pypi/simple"
+        "https://pypi.org/simple"
+    )
+    local m installed=0
+    for m in "${mirrors[@]}"; do
+        if run "$PY_BIN" -m pip install "PySide6>=6.0.0" "pyserial>=3.5" \
+                --index-url "$m" --disable-pip-version-check --no-warn-script-location; then
+            installed=1; break
+        fi
+        warn "在这个源上失败，换下一个"
+    done
+    [ "$installed" -eq 1 ] && ok "依赖安装完成" || err "依赖安装失败，可手动： $PY_BIN -m pip install PySide6 pyserial"
+}
+
+servo_tool_check() {
+    need_env || return 1
+    section "环境检查"
+    if ! servo_tool_installed; then
+        warn "还没安装，先用 [1]"
+        return 1
+    fi
+    ( cd "$SERVO_TOOL_DIR" && "$PY_BIN" setup.py )
+}
+
+servo_tool_launch() {
+    need_env || return 1
+    section "启动舵机调试工具"
+    if ! servo_tool_installed; then
+        warn "还没安装，先用 [1]"
+        return 1
+    fi
+
+    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        err "当前没有图形界面（DISPLAY 与 WAYLAND_DISPLAY 都没设置）"
+        info "这个工具是 Qt 界面，必须有桌面环境才能跑。"
+        info "如果是 SSH 远程，可以："
+        info "  - 用 ssh -X 转发图形（速度慢，能用）"
+        info "  - 或直接在机械臂那台机器的桌面上运行"
+        info "没有桌面又只想验证舵机，用 [2] 找串口 + [4] 标定机械臂 也够用"
+        return 1
+    fi
+
+    if ! "$PY_BIN" -c 'import PySide6' >/dev/null 2>&1; then
+        warn "环境里没有 PySide6，先跑 [1] 安装"
+        return 1
+    fi
+
+    info "启动中，界面会单独弹出（关闭窗口即退出）"
+    info "串口被占用时可手动指定： --port1 /dev/ttyUSB0 --port2 /dev/ttyUSB1"
+    ( cd "$SERVO_TOOL_DIR" && "$PY_BIN" -m src.gui.factory_calibration_tool )
+}
+
+servo_tool_uninstall() {
+    section "卸载舵机调试工具"
+    if [ ! -d "$SERVO_TOOL_DIR" ]; then
+        info "没装，无需卸载"
+        return 0
+    fi
+    info "将删除目录：$SERVO_TOOL_DIR"
+    info "（PySide6 不删，可能被别的程序用着）"
+    confirm "确认删除？" || { info "已取消"; return 0; }
+    if rm -rf "$SERVO_TOOL_DIR"; then ok "已删除"; else err "删除失败"; fi
+}
+
+action_servo_tool() {
+    while true; do
+        clear 2>/dev/null || true
+        printf '\n  %s====== 舵机调试工具（Seeed_RoboController）======%s\n\n' "$C_C" "$C_0"
+        if servo_tool_installed; then
+            printf '  状态: %s已安装%s  %s\n' "$C_G" "$C_0" "$SERVO_TOOL_DIR"
+        else
+            printf '  状态: %s未安装%s\n' "$C_D" "$C_0"
+        fi
+        printf '\n'
+        printf '    [1] 安装 / 更新\n'
+        printf '    [2] 环境检查\n'
+        printf '    [3] 启动图形界面\n'
+        printf '    [4] 卸载\n'
+        printf '    [5] 官方说明（网址）\n'
+        printf '    [0] 返回\n\n'
+
+        local k; k=$(ask "请输入")
+        case "$k" in
+            1) servo_tool_install ;;
+            2) servo_tool_check ;;
+            3) servo_tool_launch ;;
+            4) servo_tool_uninstall ;;
+            5)
+                section "官方说明"
+                info "https://wiki.seeedstudio.com/cn/lerobot_steering_gear_debugging_tool/"
+                echo
+                printf '  能做什么：\n'
+                printf '    - 检测 1-6 号舵机是否都在线\n'
+                printf '    - 改舵机 ID（ID 重复时只能一个个拆下来重刷）\n'
+                printf '    - 写中位值（把当前位置当零点烧进去）\n'
+                printf '    - 单个舵机拖进度条测试、看电压/温度/负载/电流\n'
+                printf '    - 读写寄存器、改波特率、恢复出厂\n'
+                echo
+                printf '  %s注意：这是 Qt 图形程序，必须有桌面环境；无桌面请用本菜单的 [2][4]。%s\n' "$C_Y" "$C_0"
+                ;;
+            0|"") return ;;
+            *) warn "没有这个选项"; sleep 1; continue ;;
+        esac
+        pause_menu
+    done
+}
+
 # ---------------------------------------------------------------- 高级选项
 action_advanced() {
     while true; do
@@ -844,6 +1018,7 @@ show_menu() {
     printf '    [2] 查找串口\n'
     printf '    [3] 设置电机 ID\n'
     printf '    [4] 标定机械臂    [r] 校准管理（删除/重标定）\n'
+    printf '    [s] 舵机调试工具（Seeed 图形界面，查 ID/中位/单测）\n'
     printf '\n   日常使用\n'
     printf '    [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放\n'
     printf '\n   其他\n'
@@ -862,6 +1037,7 @@ dispatch() {
         3) action_setup_motors ;;
         4) action_calibrate ;;
         r|R) action_calibration ;;
+        s|S) action_servo_tool; return ;;
         5) action_teleoperate ;;
         6) action_record ;;
         7) action_train ;;
