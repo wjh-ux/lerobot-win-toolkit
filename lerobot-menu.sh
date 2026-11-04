@@ -438,11 +438,28 @@ for p in l.comports():
         ask "手动输入串口（如 /dev/ttyACM0）"
         return
     fi
+
+    # 官方 SO-ARM 教程里反复出现 sudo chmod 666 /dev/ttyACM*，
+    # 就是因为默认权限下普通用户打不开，接上臂第一件事就会撞 Permission denied。
+    local denied=""
+    while IFS='|' read -r d _; do
+        [ -z "$d" ] && continue
+        if [ ! -r "$d" ] || [ ! -w "$d" ]; then denied="$denied $d"; fi
+    done <<< "$ports"
+    if [ -n "$denied" ]; then
+        warn "这些串口当前用户打不开:$denied"
+        info "临时放行： sudo chmod 666 /dev/ttyACM*"
+        info "永久生效： sudo usermod -aG dialout \$USER   然后重新登录"
+    fi
+
     printf '\n  检测到：\n'
     local i=0
     while IFS='|' read -r dev desc; do
         i=$((i+1)); printf '    [%d] %-14s %s\n' "$i" "$dev" "$desc"
     done <<< "$ports"
+    # 官方教程里的经验：先插的是从臂、后插的是主臂
+    info "经验：先插的通常是 ttyACM0（从臂），后插的是 ttyACM1（主臂）"
+
     local sel; sel=$(ask "选择串口" "1")
     local dev
     dev=$(printf '%s\n' "$ports" | sed -n "${sel}p" | cut -d'|' -f1)

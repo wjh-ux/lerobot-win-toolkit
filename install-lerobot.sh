@@ -15,6 +15,8 @@
 #   ./install-lerobot.sh --cpu           # 强制 CPU 版，省掉约 4.5 GB 的 CUDA 依赖
 #   ./install-lerobot.sh --yes           # 非交互：不问，有卡按 GPU、无卡按 CPU
 #   ./install-lerobot.sh --skip-apt      # 跳过系统依赖（已装好时用）
+#   ./install-lerobot.sh --repo https://github.com/Seeed-Projects/lerobot.git
+#                                        # 用指定的仓库（SO-ARM 用户可用 Seeed 验证过的 fork）
 #
 # 关于 GPU：脚本会先检测本机有没有 NVIDIA 卡（nvidia-smi / /proc / lspci 三重判断），
 #   有卡就推荐 CUDA 版并让你确认；没有就自动装 CPU 版（省约 4.5 GB）。
@@ -39,6 +41,7 @@ PIP_VERSION=""
 TORCH_FLAVOR="auto"
 CPU_ONLY=0          # 兼容旧的 --cpu，等同 TORCH_FLAVOR=cpu
 ASSUME_YES=0        # 非交互环境：不问，直接按推荐走
+REPO_URL=""          # 指定 git 源（例如 Seeed 的 fork）
 
 # ---------------------------------------------------------------- 输出
 C_RESET=$'\033[0m'
@@ -193,6 +196,7 @@ while [ $# -gt 0 ]; do
         --cpu)        CPU_ONLY=1; TORCH_FLAVOR="cpu" ;;
         --gpu)        TORCH_FLAVOR="gpu" ;;
         --yes|-y)     ASSUME_YES=1 ;;
+        --repo)       REPO_URL="$2"; shift ;;
         --env)        ENV_NAME="$2"; shift ;;
         --python)     PY_VERSION="$2"; shift ;;
         --extras)     EXTRAS="$2"; shift ;;
@@ -254,9 +258,22 @@ detect_gpu() {
     return 1
 }
 
-# 关键数字：显卡算力（CUDA capability）决定能不能跑某些策略，顺便看一眼
-# 这里只做"能否用"的判断，不深挖
+# 版本比较：ver_ge A B  ->  A >= B
+ver_ge() {
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]
+}
 
+# CUDA 运行时版本 -> NVIDIA 官方要求的最低驱动
+# 数字来自 PyTorch 官方/中文文档：cu130 要求 580.65，cu128 要求 570.86。
+# 驱动比这个旧时，torch 能装上但 torch.cuda.is_available() 一定是 False。
+cuda_min_driver() {
+    case "$1" in
+        13.0) printf '580.65' ;;
+        12.8) printf '570.86' ;;
+        12.6) printf '560.28' ;;
+        *)    printf '' ;;
+    esac
+}
 
 # ---------------------------------------------------------------- 镜像表
 PIP_MIRRORS=(
@@ -278,6 +295,12 @@ GIT_URLS=(
     "https://ghfast.top/https://github.com/huggingface/lerobot.git"
     "https://github.com/huggingface/lerobot.git"
 )
+
+# --repo 指定了源就用它（例如 SO-ARM 用户可以用 Seeed 验证过的 fork：
+#   --repo https://github.com/Seeed-Projects/lerobot.git ）
+if [ -n "$REPO_URL" ]; then
+    GIT_URLS=("$REPO_URL")
+fi
 
 MINIFORGE_URLS=(
     "https://mirrors.tuna.tsinghua.edu.cn/github-release/conda-forge/miniforge/LatestRelease/Miniforge3-Linux-x86_64.sh"
@@ -808,8 +831,25 @@ PY
             if [ -n "$tcu" ]; then
                 # 装的是 CUDA 版，但用不上 —— 这才是用户真正需要知道的
                 echo
-                echo "  ${C_YEL}[注意] 装的是 CUDA 版 torch（$tver），但 torch.cuda.is_available() = False${C_RESET}"
-                echo "  ${C_GRY}常见原因，按可能性排序：${C_RESET}"
+                echo "  ${C_YEL}[注意] 装的是 CUDA 版 torch（$tver，CUDA $tcu），但 torch.cuda.is_available() = False${C_RESET}"
+
+                # 先判断最确定的一条：驱动版本够不够 CUDA 运行时要求
+                mindrv=$(cuda_min_driver "$tcu")
+                if [ -n "$mindrv" ] && [ -n "$GPU_DRIVER" ]; then
+                    if ver_ge "$GPU_DRIVER" "$mindrv"; then
+                        echo "  ${C_GRY}  驱动 $GPU_DRIVER，满足 CUDA $tcu 要求的 ≥ $mindrv，所以不是驱动太旧的问题${C_RESET}"
+                    else
+                        echo
+                        echo "  ${C_RED}  >>> 找到原因：驱动太旧 <<<${C_RESET}"
+                        echo "  ${C_GRY}  CUDA $tcu 要求驱动 ≥ $mindrv，当前是 $GPU_DRIVER${C_RESET}"
+                        echo "  ${C_GRY}  升级驱动： ./lerobot-menu.sh g → [2] 安装驱动${C_RESET}"
+                        echo "  ${C_GRY}  或换用匹配旧驱动的 CUDA 版本：${C_RESET}"
+                        echo "  ${C_GRY}    $PY_BIN -m pip install --force-reinstall torch torchvision \\${C_RESET}"
+                        echo "  ${C_GRY}        --index-url https://download.pytorch.org/whl/cu128${C_RESET}"
+                    fi
+                fi
+
+                echo "  ${C_GRY}其它常见原因，按可能性排序：${C_RESET}"
                 echo "  ${C_GRY}  1. 没装 NVIDIA 驱动，或驱动版本太老${C_RESET}"
                 if [ -n "$GPU_DRIVER" ]; then
                     echo "  ${C_GRY}     当前驱动: $GPU_DRIVER${C_RESET}"

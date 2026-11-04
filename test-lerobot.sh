@@ -205,7 +205,26 @@ for p in l.comports():
         else
             res "串口" "PASS" "$(printf '%s\n' "$usbports" | wc -l) 个 USB 串口"
             printf '%s\n' "$usbports" | sed 's/^/         /'
-            printf '  %s        提示：非 root 用户若打不开串口，把账号加进 dialout 组：sudo usermod -aG dialout $USER%s\n' "$C_D" "$C_0"
+
+            # 光看到端口没用，能不能读写才是关键。
+            # 官方的 SO-ARM 教程里反复强调 sudo chmod 666 /dev/ttyACM*，
+            # 就是因为默认权限下普通用户打开会 Permission denied。
+            denied=""
+            while read -r line; do
+                dev=$(printf '%s' "$line" | awk '{print $1}')
+                [ -z "$dev" ] && continue
+                if [ ! -r "$dev" ] || [ ! -w "$dev" ]; then
+                    denied="$denied $dev"
+                fi
+            done <<< "$usbports"
+
+            if [ -n "$denied" ]; then
+                res "串口权限" "FAIL" "打不开:$denied"
+                printf '  %s        临时放行（重启失效）： sudo chmod 666 /dev/ttyACM*%s\n' "$C_D" "$C_0"
+                printf '  %s        永久生效： sudo usermod -aG dialout $USER   然后重新登录%s\n' "$C_D" "$C_0"
+            else
+                res "串口权限" "PASS" "当前用户可读写"
+            fi
         fi
     else
         res "串口" "WARN" "pyserial 不可用"

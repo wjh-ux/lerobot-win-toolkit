@@ -170,6 +170,37 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 > 驱动安装需要 sudo、会触发 DKMS 重新编译内核模块、装完要重启。
 > 有桌面环境时**重启前别注销**，否则可能黑屏。
 
+### 串口权限（接上机械臂必看）
+
+Linux 下普通用户默认打不开 `/dev/ttyACM*`，第一次接臂大概率撞 `Permission denied`。
+Seeed 的 SO-ARM 教程里几乎每一步都要先执行 `sudo chmod 666 /dev/ttyACM*`，原因就在这。
+
+```bash
+sudo chmod 666 /dev/ttyACM*          # 临时放行，重启或重插后失效
+sudo usermod -aG dialout $USER       # 永久生效，需要重新登录
+```
+
+`test-lerobot.sh --hw` 会**实际检查能否读写**，读不了就报 `[FAIL] 串口权限`；
+菜单里选串口时也会提示。
+
+> 端口顺序的经验：先插的通常是 `ttyACM0`（从臂），后插的是 `ttyACM1`（主臂）。
+
+### 用 Seeed 验证过的仓库（SO-ARM 用户）
+
+Seeed 的 Wiki 建议 SO-ARM100/101 用户用他们维护的 fork，因为官方仓库更新快、
+依赖和命令可能变。脚本支持指定源：
+
+```bash
+./install-lerobot.sh --repo https://github.com/Seeed-Projects/lerobot.git
+```
+
+该 fork 另有一个 `DepthCameraSupport` 分支（RealSense 深度相机需要），
+脚本只克隆默认分支，用 RealSense 时需自行 `git checkout DepthCameraSupport`。
+
+**CUDA 版本与驱动下限**：PyPI 默认的 Linux torch 轮子绑 **cu130**，要求驱动 **≥ 580.65**；
+`cu128` 要求 **≥ 570.86**。驱动比这旧时，torch 装得上但 `torch.cuda.is_available()`
+一定是 `False`。脚本在核查阶段会直接比对驱动版本，命中就明确告诉你「驱动太旧」。
+
 **关于 `--cpu`**：PyPI 的 Linux torch 轮子自带整套 CUDA 库（`nvidia-*`、`cuda-toolkit`），
 在没有 NVIDIA GPU 的机器上白占约 4.5 GB。加 `--cpu` 会先从国内镜像
 （上海交大 `mirror.sjtu.edu.cn/pytorch-wheels/cpu`，官方 `download.pytorch.org/whl/cpu` 兜底）
