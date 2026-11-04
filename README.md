@@ -1,17 +1,24 @@
-# LeRobot Windows 一键安装工具
+# LeRobot 一键安装工具箱（Windows / Linux）
 
-把 [LeRobot](https://github.com/huggingface/lerobot) 在 Windows 上从"一堆命令"变成"敲个数字"。
+把 [LeRobot](https://github.com/huggingface/lerobot) 从"一堆命令"变成"敲个数字"。
 
 专治国内网络环境下的几个老问题：GitHub 连不上、清华 conda 镜像的索引太大导致超时、
-pip 装到一半失败、装完了不知道该敲什么命令。
+pip 装到一半失败、装完了不知道该敲什么命令、接了机械臂打不开串口。
 
-已在 **Windows Server 2022（无 winget、无 git、无 GPU）** 上从零跑通全流程。
+| 平台 | 状态 |
+|---|---|
+| **Windows** | 在 Windows Server 2022（无 winget、无 git、无 GPU）上从零跑通全流程 |
+| **Linux** | 在 Ubuntu 22.04.5（x86_64，无 GPU）上跑通安装 / 自检 / 面板 / GPU 驱动管理 |
+
+两个平台的**菜单按键完全一致**，换系统不用重学。
 
 > English: [README.en.md](README.en.md)
 
 ---
 
-## 最简用法：双击 `lerobot.bat`
+## 最简用法
+
+### Windows：双击 `lerobot.bat`
 
 不用记 `powershell -ExecutionPolicy Bypass -File ...` 这一串，也不用开 PowerShell。
 
@@ -31,6 +38,21 @@ lerobot.bat hw         硬件检查（等价于 w）
 
 > `lerobot.bat` 只是把 CMD 转接到 PowerShell，参数原样透传，并且只在**双击**时
 > 结束时停住窗口（在 CMD 里调用会自动退出，不会卡住）。
+
+### Linux：跑 `lerobot-menu.sh`
+
+```bash
+chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
+./lerobot-menu.sh          # 打开面板，敲数字或字母
+```
+
+也可以跳过菜单直接调脚本：
+
+```bash
+./install-lerobot.sh --dry-run    # 只看计划，不装
+./install-lerobot.sh              # 安装（自动检测 GPU、镜像降级）
+./test-lerobot.sh --hw            # 自检（含串口/相机/标定）
+```
 
 ## 关于管理员权限
 
@@ -90,24 +112,27 @@ Get-ChildItem .\*.ps1 | Unblock-File
 - **[真机验证清单](docs/hardware-verification.md)** —— 接上机械臂后按这个走一遍，
   能验证本工具尚未在硬件上确认的部分（标定、双摄配置、控制频率）。
 
-## 四个文件
+- **[TODO.md](TODO.md)** —— 已知限制与待验证项。这里如实记录哪些跑通了、哪些还没在
+  真硬件上验证过（真机八步、驱动四项），不含"应该可以"这种话。
+
+## 文件
 
 ### Windows
 
 | 文件 | 作用 | 大小 |
 |---|---|---|
 | `lerobot.bat` | **双击入口**。CMD 转接 PowerShell，参数透传 | 2 KB |
-| `lerobot-menu.ps1` | **真正的入口**。交互式菜单，敲数字或字母 | 27 KB |
+| `lerobot-menu.ps1` | **真正的入口**。19 项菜单 + 高级选项 + 自由终端 | 39 KB |
 | `install-lerobot.ps1` | 安装环境，9 个步骤带进度条 | 45 KB |
 | `test-lerobot.ps1` | 自检，软件 8 项 + 硬件 3 项 | 19 KB |
 
 ### Linux（Ubuntu / Debian）
 
-| 文件 | 作用 |
-|---|---|
-| `lerobot-menu.sh` | **工具箱面板**。敲数字或字母，与 Windows 版菜单对应 |
-| `install-lerobot.sh` | 安装环境，镜像降级 + 进度显示 |
-| `test-lerobot.sh` | 自检，软件组 + 硬件组（`--hw`） |
+| 文件 | 作用 | 大小 |
+|---|---|---|
+| `lerobot-menu.sh` | **工具箱面板**，与 Windows 版按键一致 | 35 KB |
+| `install-lerobot.sh` | 安装环境，镜像降级 + 进度显示 + GPU 自动检测 | 34 KB |
+| `test-lerobot.sh` | 自检，软件组 + 硬件组（`--hw`） | 10 KB |
 
 ```bash
 chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
@@ -136,7 +161,35 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
     [t] 打开 LeRobot 终端      [x] 高级选项（其余 8 个命令）
 ```
 
-也可以直达：`./lerobot-menu.sh g`（GPU 面板）、`./lerobot-menu.sh 4`（标定）。
+### 按键对照
+
+两个平台同一套键，只有 Windows 没有 `[g]`（NVIDIA 驱动管理只对 Linux 有意义）：
+
+| 键 | 作用 | Windows | Linux |
+|---|---|:---:|:---:|
+| `0` | 安装 / 修复环境 | ✅ | ✅ |
+| `1` | 软件自检 | ✅ | ✅ |
+| `w` | 硬件检查 | ✅ | ✅ |
+| `g` | GPU 与 NVIDIA 驱动 | — | ✅ |
+| `2` | 查找串口 | ✅ | ✅ |
+| `3` | 设置电机 ID | ✅ | ✅ |
+| `4` | 标定机械臂 | ✅ | ✅ |
+| `r` | 校准管理（删除 / 重标定） | ✅ | ✅ |
+| `5` | 遥操作 | ✅ | ✅ |
+| `6` | 录制数据集 | ✅ | ✅ |
+| `7` | 训练策略 | ✅ | ✅ |
+| `8` | 推理 / 跑策略 | ✅ | ✅ |
+| `9` | 回放数据集 | ✅ | ✅ |
+| `c` | 相机检测 | ✅ | ✅ |
+| `v` | 数据集可视化 | ✅ | ✅ |
+| `i` | 环境详情 / 标定文件 | ✅ | ✅ |
+| `m` | HuggingFace 镜像 | ✅ | ✅ |
+| `h` | 命令速查 | ✅ | ✅ |
+| `t` | 打开 LeRobot 终端 | ✅ | ✅ |
+| `x` | 高级选项（其余 8 个命令） | ✅ | ✅ |
+| `q` | 退出 | ✅ | ✅ |
+
+也可以直达：``./lerobot-menu.sh g``（GPU 面板）、``./lerobot-menu.sh 4``（标定）。
 加 `--dry-run` 时所有安装类操作只打印命令。
 
 ### 打开 LeRobot 终端（`[t]`）
@@ -310,7 +363,7 @@ Seeed 的 Wiki 建议 SO-ARM100/101 用户用他们维护的 fork，因为官方
 - **`HF_ENDPOINT` 写进 `~/.bashrc` / `~/.profile`**，而不是改系统配置。
 
 
-四个放在同一目录即可。
+Windows 的 4 个文件放在同一目录即可；Linux 的 3 个 .sh 也放在同一目录。
 
 ## 快速开始
 
@@ -341,8 +394,7 @@ powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
     [2] 查找串口              lerobot-find-port
     [3] 设置电机 ID           lerobot-setup-motors
     [4] 标定机械臂            lerobot-calibrate
-[r] 校准管理（删除/重标定）
-[t] 打开 LeRobot 终端      [x] 高级选项（其余 8 个命令）
+    [r] 校准管理（删除/重标定）
 
    日常使用
     [5] 遥操作                lerobot-teleoperate
@@ -357,6 +409,8 @@ powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
     [i] 环境详情 / 标定文件
     [m] 设置 HuggingFace 镜像
     [h] 命令速查              [q] 退出
+    [t] 打开 LeRobot 终端     环境已激活，可自由敲命令
+    [x] 高级选项              其余 8 个命令
 ```
 
 新机器按 **`0` → `1` → `2` → `3` → `4`** 的顺序走一遍就行。
@@ -383,7 +437,7 @@ powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
 lerobot-calibrate --robot.type=so101_follower --robot.port=COM3 --robot.id=my_follower_arm
 ```
 
-## 安装流程（9 步，带进度条）
+## 安装流程（Windows 9 步 / Linux 7 步，都带进度条）
 
 ```
   第 1/9 步  [██░░░░░░░░░░░░░░░░░░]  11%  前置检查
@@ -398,6 +452,18 @@ lerobot-calibrate --robot.type=so101_follower --robot.port=COM3 --robot.id=my_fo
 ```
 
 步骤总数会随参数变化（`-SkipFfmpeg` 少一步、`-WithGit` 多一步），不会出现"第 4/9 步之后就结束"。
+
+Linux 这边是 7 步（加 `--skip-apt` 时自动算成 6 步，进度条仍能走到 100%）：
+
+```
+  第 1/7 步  [███░░░░░░░░░░░░░░░░░]  14%  系统依赖（apt）
+  第 2/7 步  [██████░░░░░░░░░░░░░░]  28%  conda 环境 [lerobot]
+  第 3/7 步  [██████████░░░░░░░░░░]  42%  探测 pip 镜像（国内优先，不通降级）
+  第 4/7 步  [█████████████░░░░░░░]  57%  选择并安装 PyTorch（自动检测 GPU）
+  第 5/7 步  [████████████████░░░░]  71%  安装 ffmpeg
+  第 6/7 步  [██████████████████░░]  85%  获取 lerobot 源码
+  第 7/7 步  [████████████████████] 100%  编辑模式安装 lerobot
+```
 
 ## 镜像降级策略
 
@@ -463,11 +529,23 @@ pkgs/main     112 MB (win-64)                     zst 压缩后 12 MB
 
 ## 环境要求
 
+**Windows**
+
 - Windows 10 / 11 / Server 2019+，PowerShell 5.1 或更高
 - 磁盘剩余 ≥ 15 GB（torch + rerun-sdk 比较大）
 - 可选：NVIDIA 显卡 + 驱动（训练用；没有也能跑 CPU，只是慢）
 
 conda 和 git 都不用预装，加 `-AutoInstallPrereqs` 会走清华镜像自动装。
+
+**Linux**
+
+- Ubuntu 22.04+ / Debian 12+（apt 系），glibc；**不支持** Alpine/openWrt 这类 musl 系统
+- 磁盘剩余：CPU 版约 3 GB，CUDA 版约 8 GB
+- 系统依赖走 apt，需要 sudo；脚本只在 `sudo -n` 通过时自动装，否则打印手动命令
+- 可选：NVIDIA 显卡（脚本会检测并推荐 CUDA 版，详见 `[g]`）
+
+conda 不用预装，脚本会自动装 Miniforge（清华镜像优先）。
+HTTP 工具按 `curl` → `wget` → `python3` 三级回退，Ubuntu 22.04 默认没有 curl 也能跑。
 
 ## 已知限制
 
@@ -478,6 +556,14 @@ conda 和 git 都不用预装，加 `-AutoInstallPrereqs` 会走清华镜像自�
 - **`lerobot-record` 的双摄配置**：`--robot.cameras="{...}"` 的格式按官方文档拼的，
   没在双摄像头机器上验证。第一次录制建议先用单摄像头。
 - **`lerobot-rollout`** 是 0.6.x 才有的命令，0.5.x 及更早没有；脚本会检测并给出提示。
+
+Linux 侧另外两条：
+
+- **NVIDIA 驱动安装 `[g]`**：检测、架构判断、开源/闭源选择、命令拼装都验证过
+  （六种型号的分类正确），但**没在真实显卡上装过**。重启后 `nvidia-smi` 是否有输出、
+  `-open` 模块能否加载、卸载后桌面是否正常，都还没确认。
+- **自由终端 `[t]`**：用真实可执行的环境目录验证过变量注入（`CONDA_PREFIX` / `PATH` /
+  `python` 解析都对），但没在真正的 conda 环境里跑过 `lerobot-*` 命令。
 
 **想帮忙关掉前两条？** 按 [真机验证清单](docs/hardware-verification.md) 走一遍，
 里面有每一步该看什么、该记录什么，以及一张可直接填的结果表。跑完把结果提 issue 或 PR，
@@ -493,6 +579,9 @@ conda 和 git 都不用预装，加 `-AutoInstallPrereqs` 会走清华镜像自�
 | 子进程输出消失 | 菜单点了没反应 | `$null = Invoke-Item` 把管道输出全吞了 |
 | 引号被吞 | `print("%d" % x)` → SyntaxError | PowerShell 5.1 向外部程序传参会剥掉双引号，改用临时 .py 文件 |
 | curl 404 当成功 | 把 HTML 错误页当安装包执行 | curl 默认不因 HTTP 错误返回非零，要加 `-f` |
+| 整段代码被插两遍 | 函数重复定义，ash -n 不报错 | 替换锚点 `# … 主菜单` 同时匹配到 `# … 主菜单动作`；要用带换行的唯一锚点，并复查定义个数 |
+| .sh 变成 CRLF | ash: syntax error near unexpected token $'{\r' | [System.IO.File]::WriteAllLines 在 Windows 上默认写 CRLF，整块替换会把全文转成 CRLF；写完必须量一遍 |
+| 版本排序装错版本 | 想装 0.6.1 却装了 0.4.1 | sort -V 排的是完整路径，路径里的哈希目录不同；要先按文件名排序 |
 | conda 装完找不到 | 误判安装失败 | NSIS 静默安装会提前返回，要轮询等文件锁释放 |
 | 环境"借"用户级包 | 换账户就 `ModuleNotFoundError` | 系统里已有同版本 Python 时会启用 user site-packages，要设 `PYTHONNOUSERSITE=1` |
 | 进度条变问号 | `[██???]` | GBK 控制台撑不住 `░`，要逐字符探测编码 |
