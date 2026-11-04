@@ -133,10 +133,41 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 
    其他
     [c] 相机检测   [i] 环境详情   [m] HF 镜像   [h] 命令速查   [q] 退出
+    [t] 打开 LeRobot 终端      [x] 高级选项（其余 8 个命令）
 ```
 
 也可以直达：`./lerobot-menu.sh g`（GPU 面板）、`./lerobot-menu.sh 4`（标定）。
 加 `--dry-run` 时所有安装类操作只打印命令。
+
+### 打开 LeRobot 终端（`[t]`）
+
+不用手动 `conda activate`，直接开一个**环境已就位的自由终端**，随便敲命令：
+
+- **Linux**：在当前窗口里起一个 `bash`，`PATH` / `CONDA_PREFIX` / `LD_LIBRARY_PATH`
+  都指向环境，提示符变成 `(lerobot) ~ $`；`exit` 回到菜单。
+- **Windows**：新开一个 PowerShell 窗口，同样注入了 `PATH`（含 `Scripts`、
+  `Library\bin`）和 `CONDA_PREFIX`；关掉窗口即可。
+
+两边都会顺手把 `HF_ENDPOINT` 补成 `https://hf-mirror.com`（如果没设过）。
+
+### 高级选项（`[x]`）
+
+主菜单放过常用 10 个动作，剩下的 8 个命令都在这里：
+
+| 键 | 命令 | 用途 |
+|---|---|---|
+| 1 | `lerobot-info` | 环境与硬件信息 |
+| 2 | `lerobot-find-joint-limits` | 探测关节限位 |
+| 3 | `lerobot-dataset-viz` | 数据集可视化 |
+| 4 | `lerobot-imgtransform-viz` | 图像变换可视化 |
+| 5 | `lerobot-eval` | 评估策略 |
+| 6 | `lerobot-annotate` | 数据标注 |
+| 7 | `lerobot-edit-dataset` | 数据集编辑（删回合/合并/改特征） |
+| 8 | `lerobot-train-tokenizer` | 训练 VLA tokenizer |
+| 9 | `lerobot-setup-can` | Damiao CAN 总线初始化 |
+
+还有 **`[c] 任意命令`**：列出环境里全部 `lerobot-*`，你敲命令名和参数，它负责调起来——
+这样即便以后上游加了新命令，也不用改脚本。
 
 ### 校准管理（`[r]`）
 
@@ -311,6 +342,7 @@ powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
     [3] 设置电机 ID           lerobot-setup-motors
     [4] 标定机械臂            lerobot-calibrate
 [r] 校准管理（删除/重标定）
+[t] 打开 LeRobot 终端      [x] 高级选项（其余 8 个命令）
 
    日常使用
     [5] 遥操作                lerobot-teleoperate

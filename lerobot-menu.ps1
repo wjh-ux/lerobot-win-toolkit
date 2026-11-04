@@ -285,6 +285,8 @@ function Show-Menu {
     Write-Host '    [i] 环境详情 / 标定文件' -ForegroundColor White
     Write-Host '    [m] 设置 HuggingFace 镜像' -ForegroundColor White
     Write-Host '    [h] 命令速查              [q] 退出' -ForegroundColor White
+    Write-Host '    [t] 打开 LeRobot 终端（环境已激活，可自由敲命令）' -ForegroundColor White
+    Write-Host '    [x] 高级选项（其余 8 个命令）' -ForegroundColor White
     Write-Host ''
 }
 
@@ -687,6 +689,129 @@ function Action-Help {
     Write-Host '  在任意命令后加 --help 都能看到 --robot.type / --robot.port 这些参数' -ForegroundColor Gray
 }
 
+# ============================================================ 高级选项
+function Action-Advanced {
+    while ($true) {
+        Clear-Host
+        Write-Host ''
+        Write-Host '  ====== 高级选项（其余 lerobot 命令）======' -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host '    [1] lerobot-info              环境与硬件信息' -ForegroundColor White
+        Write-Host '    [2] lerobot-find-joint-limits 探测关节限位' -ForegroundColor White
+        Write-Host '    [3] lerobot-dataset-viz       数据集可视化' -ForegroundColor White
+        Write-Host '    [4] lerobot-imgtransform-viz  图像变换可视化' -ForegroundColor White
+        Write-Host '    [5] lerobot-eval              评估策略' -ForegroundColor White
+        Write-Host '    [6] lerobot-annotate          数据标注' -ForegroundColor White
+        Write-Host '    [7] lerobot-edit-dataset      数据集编辑（删回合/合并/改特征）' -ForegroundColor White
+        Write-Host '    [8] lerobot-train-tokenizer   训练 VLA tokenizer' -ForegroundColor White
+        Write-Host '    [9] lerobot-setup-can         Damiao CAN 总线初始化' -ForegroundColor White
+        Write-Host ''
+        Write-Host '    [c] 任意命令（自己敲参数）' -ForegroundColor White
+        Write-Host '    [0] 返回' -ForegroundColor White
+        Write-Host ''
+
+        $k = Read-Key '请输入'
+        switch ($k) {
+            '1' { Invoke-Lerobot 'lerobot-info' }
+            '2' {
+                if (-not (Assert-Env)) { break }
+                $port = Select-SerialPort '串口'
+                if (-not $port) { break }
+                $type = Select-RobotType
+                $id = Select-RobotId -Kind 'robot' -Default 'my_follower_arm'
+                Invoke-Lerobot 'lerobot-find-joint-limits' @("--robot.type=$type", "--robot.port=$port", "--robot.id=$id")
+            }
+            '3' {
+                if (-not (Assert-Env)) { break }
+                $ds = Read-Text '数据集 repo_id' $(if ($env:HF_USER) { "$env:HF_USER/so101_dataset" } else { 'so101_dataset' })
+                $ep = Read-Text '回合号（留空=全部）' ''
+                if ($ep) { Invoke-Lerobot 'lerobot-dataset-viz' @("--repo-id=$ds", "--episode-index=$ep") }
+                else { Invoke-Lerobot 'lerobot-dataset-viz' @("--repo-id=$ds") }
+            }
+            '4' {
+                if (-not (Assert-Env)) { break }
+                $ds = Read-Text '数据集 repo_id' $(if ($env:HF_USER) { "$env:HF_USER/so101_dataset" } else { 'so101_dataset' })
+                Invoke-Lerobot 'lerobot-imgtransform-viz' @("--repo-id=$ds")
+            }
+            '5' {
+                if (-not (Assert-Env)) { break }
+                $pol = Read-Text '策略路径（outputs\train\... 或 HF repo_id）' ''
+                if (-not $pol) { Write-Host '  需要策略路径' -ForegroundColor Yellow; break }
+                Invoke-Lerobot 'lerobot-eval' @("--policy.path=$pol")
+            }
+            '6' {
+                if (-not (Assert-Env)) { break }
+                $ds = Read-Text '数据集 repo_id' $(if ($env:HF_USER) { "$env:HF_USER/so101_dataset" } else { 'so101_dataset' })
+                Invoke-Lerobot 'lerobot-annotate' @("--repo-id=$ds")
+            }
+            '7' {
+                if (-not (Assert-Env)) { break }
+                $ds = Read-Text '数据集 repo_id' $(if ($env:HF_USER) { "$env:HF_USER/so101_dataset" } else { 'so101_dataset' })
+                Write-Host '  常见操作： delete_episodes / merge_datasets / add_features' -ForegroundColor Gray
+                $op = Read-Text '操作类型（留空看帮助）' ''
+                if ($op) { Invoke-Lerobot 'lerobot-edit-dataset' @("--repo-id=$ds", "--operation.type=$op") }
+                else { Invoke-Lerobot 'lerobot-edit-dataset' @('--help') }
+            }
+            '8' {
+                if (-not (Assert-Env)) { break }
+                $ds = Read-Text '数据集 repo_id' $(if ($env:HF_USER) { "$env:HF_USER/so101_dataset" } else { 'so101_dataset' })
+                Invoke-Lerobot 'lerobot-train-tokenizer' @("--dataset.repo_id=$ds")
+            }
+            '9' {
+                Write-Host '  Damiao 电机走 CAN 总线（OpenArm 等），需要先配置 can 接口' -ForegroundColor Gray
+                Invoke-Lerobot 'lerobot-setup-can' @('--help')
+            }
+            'c' {
+                if (-not (Assert-Env)) { break }
+                $names = @(Get-ChildItem $script:ScriptsDir -Filter 'lerobot-*.exe' -ErrorAction SilentlyContinue |
+                           ForEach-Object { $_.BaseName -replace '^lerobot-', '' })
+                if ($names.Count -eq 0) { Write-Host '  环境里没有 lerobot-* 命令' -ForegroundColor Yellow; break }
+                Write-Host ''
+                Write-Host ('  可用：' + ($names -join '  ')) -ForegroundColor Gray
+                $short = Read-Text '要运行哪个（不带 lerobot- 前缀）' ''
+                if (-not $short) { break }
+                $raw = Read-Text '参数（留空则显示 --help）' '--help'
+                $argv = @()
+                if ($raw) { $argv = $raw -split '\s+' | Where-Object { $_ } }
+                Invoke-Lerobot "lerobot-$short" $argv
+            }
+            '0' { return }
+            '' { return }
+            default { Write-Host '  没有这个选项' -ForegroundColor Yellow; Start-Sleep -Milliseconds 600 }
+        }
+        Pause-Menu
+    }
+}
+
+# ============================================================ 自由终端
+function Action-Terminal {
+    if (-not (Assert-Env)) { return }
+    $rc = Join-Path $env:TEMP ("lerobot-term-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+    $prefix = $script:EnvPrefix
+    $lines = @(
+        "`$env:CONDA_PREFIX     = '$prefix'"
+        "`$env:CONDA_DEFAULT_ENV = '$EnvName'"
+        "`$env:PATH = '$prefix;$prefix\Scripts;$prefix\Library\bin;' + `$env:PATH"
+        "`$env:PYTHONNOUSERSITE = '1'"
+        "if (-not `$env:HF_ENDPOINT) { `$env:HF_ENDPOINT = 'https://hf-mirror.com' }"
+        "function global:prompt { '(lerobot) PS ' + (Get-Location) + '> ' }"
+        "Write-Host '================================================' -ForegroundColor Cyan"
+        "Write-Host ' LeRobot 终端（环境已激活）' -ForegroundColor Cyan"
+        "`$py = (Get-Command python -ErrorAction SilentlyContinue)"
+        "if (`$py) { Write-Host (' python : ' + `$py.Source) -ForegroundColor Gray }"
+        "Write-Host ' 输入 exit 关闭这个窗口' -ForegroundColor Gray"
+        "Write-Host '================================================' -ForegroundColor Cyan"
+        "Set-Location '$HOME'"
+    )
+    Set-Content -LiteralPath $rc -Value $lines -Encoding UTF8
+    Write-Host ''
+    Write-Host '  正在打开新的 PowerShell 窗口（环境已激活）...' -ForegroundColor Yellow
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoExit', '-NoLogo', '-ExecutionPolicy', 'Bypass', '-File', "`"$rc`""
+    ) | Out-Null
+    Write-Host '  关闭那个窗口即可回到这里' -ForegroundColor Gray
+}
+
 # ============================================================ 分发
 function Invoke-MenuItem([string]$key) {
     switch ($key) {
@@ -707,6 +832,8 @@ function Invoke-MenuItem([string]$key) {
         'i' { Action-Info }
         'm' { Action-Mirror }
         'h' { Action-Help }
+        't' { Action-Terminal }
+        'x' { Action-Advanced; return }
         'q' {
             Write-Host ''
             Write-Host '  再见。' -ForegroundColor Cyan

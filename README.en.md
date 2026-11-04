@@ -108,6 +108,8 @@ lerobot.bat
     [3] Set motor IDs           lerobot-setup-motors
     [4] Calibrate arm           lerobot-calibrate
 [r] Calibration manager (delete / re-calibrate)
+[t] Open a LeRobot terminal (env activated)
+[x] Advanced: the remaining 8 commands
 
    Daily use
     [5] Teleoperate             lerobot-teleoperate

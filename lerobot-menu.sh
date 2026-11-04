@@ -709,6 +709,121 @@ action_help() {
     printf '\n  查某个命令的参数： lerobot-<命令> --help\n'
 }
 
+# ---------------------------------------------------------------- 高级选项
+action_advanced() {
+    while true; do
+        clear 2>/dev/null || true
+        printf '\n  %s====== 高级选项（其余 lerobot 命令）======%s\n\n' "$C_C" "$C_0"
+        printf '    [1] lerobot-info              环境与硬件信息\n'
+        printf '    [2] lerobot-find-joint-limits 探测关节限位\n'
+        printf '    [3] lerobot-dataset-viz       数据集可视化\n'
+        printf '    [4] lerobot-imgtransform-viz  图像变换可视化\n'
+        printf '    [5] lerobot-eval              评估策略\n'
+        printf '    [6] lerobot-annotate          数据标注\n'
+        printf '    [7] lerobot-edit-dataset      数据集编辑（删回合/合并/改特征）\n'
+        printf '    [8] lerobot-train-tokenizer   训练 VLA tokenizer\n'
+        printf '    [9] lerobot-setup-can         Damiao CAN 总线初始化\n'
+        printf '\n    [c] 任意命令（自己敲参数）\n'
+        printf '    [0] 返回\n\n'
+
+        local k; k=$(ask "请输入")
+        case "$k" in
+            1) lerobot_cmd lerobot-info ;;
+            2)
+                local port; port=$(pick_port); [ -z "$port" ] && { pause_menu; continue; }
+                local type; type=$(ask "机型" "so101_follower")
+                local id; id=$(ask "id" "my_follower_arm")
+                lerobot_cmd lerobot-find-joint-limits \
+                    "--robot.type=$type" "--robot.port=$port" "--robot.id=$id"
+                ;;
+            3)
+                local ds; ds=$(ask "数据集 repo_id" "${HF_USER:+$HF_USER/}so101_dataset")
+                local ep; ep=$(ask "回合号（留空=全部）" "")
+                if [ -n "$ep" ]; then
+                    lerobot_cmd lerobot-dataset-viz "--repo-id=$ds" "--episode-index=$ep"
+                else
+                    lerobot_cmd lerobot-dataset-viz "--repo-id=$ds"
+                fi
+                ;;
+            4)
+                local ds2; ds2=$(ask "数据集 repo_id" "${HF_USER:+$HF_USER/}so101_dataset")
+                lerobot_cmd lerobot-imgtransform-viz "--repo-id=$ds2"
+                ;;
+            5)
+                local pol; pol=$(ask "策略路径（outputs/train/... 或 HF repo_id）" "")
+                [ -z "$pol" ] && { warn "需要策略路径"; pause_menu; continue; }
+                lerobot_cmd lerobot-eval "--policy.path=$pol"
+                ;;
+            6)
+                local ds3; ds3=$(ask "数据集 repo_id" "${HF_USER:+$HF_USER/}so101_dataset")
+                lerobot_cmd lerobot-annotate "--repo-id=$ds3"
+                ;;
+            7)
+                local ds4; ds4=$(ask "数据集 repo_id" "${HF_USER:+$HF_USER/}so101_dataset")
+                info "常见操作： delete_episodes / merge_datasets / add_features"
+                local op; op=$(ask "操作类型（留空看帮助）" "")
+                if [ -n "$op" ]; then
+                    lerobot_cmd lerobot-edit-dataset "--repo-id=$ds4" "--operation.type=$op"
+                else
+                    lerobot_cmd lerobot-edit-dataset "--help"
+                fi
+                ;;
+            8)
+                local ds5; ds5=$(ask "数据集 repo_id" "${HF_USER:+$HF_USER/}so101_dataset")
+                lerobot_cmd lerobot-train-tokenizer "--dataset.repo_id=$ds5"
+                ;;
+            9)
+                info "Damiao 电机走 CAN 总线（OpenArm 等），需要先配置 can 接口"
+                lerobot_cmd lerobot-setup-can --help
+                ;;
+            c|C)
+                need_env || { pause_menu; continue; }
+                printf '\n  可用命令（不带 lerobot- 前缀）：\n    '
+                ls "$ENV_PREFIX/bin" 2>/dev/null | grep -a '^lerobot-' | sed 's/^lerobot-//' | tr '\n' ' '
+                printf '\n\n'
+                local short; short=$(ask "要运行哪个" "")
+                [ -z "$short" ] && { pause_menu; continue; }
+                local args; args=$(ask "参数（留空则显示 --help）" "--help")
+                local -a argv=()
+                read -ra argv <<< "$args"
+                lerobot_cmd "lerobot-$short" "${argv[@]}"
+                ;;
+            0|"") return ;;
+            *) warn "没有这个选项"; sleep 1; continue ;;
+        esac
+        pause_menu
+    done
+}
+
+# ---------------------------------------------------------------- 自由终端
+action_terminal() {
+    if ! need_env; then return 1; fi
+    section "LeRobot 终端"
+    info "环境已激活：$ENV_NAME"
+    info "输入 exit 回到菜单"
+
+    local rc
+    rc=$(mktemp /tmp/lerobot-term-XXXXXX.rc 2>/dev/null || echo "/tmp/lerobot-term.rc")
+    cat > "$rc" <<RCEOF
+export CONDA_PREFIX="$ENV_PREFIX"
+export CONDA_DEFAULT_ENV="$ENV_NAME"
+export PATH="$ENV_PREFIX/bin:\$PATH"
+export PYTHONNOUSERSITE=1
+export HF_ENDPOINT="\${HF_ENDPOINT:-https://hf-mirror.com}"
+if [ -d "$ENV_PREFIX/lib" ]; then export LD_LIBRARY_PATH="$ENV_PREFIX/lib:\${LD_LIBRARY_PATH:-}"; fi
+PS1='(lerobot) \w \$ '
+echo "================================================"
+echo " LeRobot 终端（环境已激活）"
+echo " python : \$(command -v python)"
+echo " 输入 exit 回到菜单"
+echo "================================================"
+RCEOF
+
+    bash --rcfile "$rc" -i
+    rm -f "$rc"
+    ok "已退出终端"
+}
+
 # ================================================================ 主菜单
 show_menu() {
     clear 2>/dev/null || true
@@ -732,7 +847,9 @@ show_menu() {
     printf '\n   日常使用\n'
     printf '    [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放\n'
     printf '\n   其他\n'
-    printf '    [c] 相机检测   [i] 环境详情   [m] HF 镜像   [h] 命令速查   [q] 退出\n\n'
+    printf '    [c] 相机检测   [i] 环境详情   [m] HF 镜像   [h] 命令速查   [q] 退出\n'
+    printf '    [t] 打开 LeRobot 终端（环境已激活，可自由敲命令）\n'
+    printf '    [x] 高级选项（其余 8 个命令）\n\n'
 }
 
 dispatch() {
@@ -755,6 +872,8 @@ dispatch() {
         i|I) action_info ;;
         m|M) action_mirror ;;
         h|H) action_help ;;
+        t|T) action_terminal ;;
+        x|X) action_advanced; return ;;
         q|Q) printf '\n  再见。\n\n'; exit 0 ;;
         *) err "没有这个选项: $1"; return 1 ;;
     esac
