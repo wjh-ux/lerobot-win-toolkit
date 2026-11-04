@@ -34,6 +34,7 @@ $ErrorActionPreference = 'Continue'
 $env:PYTHONNOUSERSITE = '1'
 
 $script:PyExe     = $null
+$script:Eof = $false
 $script:EnvPrefix = $null
 $script:ScriptsDir = $null
 $script:LastCode = 0
@@ -86,7 +87,11 @@ function Invoke-Py {
 function Read-Key([string]$Prompt = '请选择') {
     Write-Host ''
     Write-Host ("  $Prompt：" ) -NoNewline -ForegroundColor Yellow
-    return (Read-Host).Trim().ToLower()
+    $raw = Read-Host
+    # Read-Host 在 stdin 关闭（EOF）时返回 $null。
+    # 不处理的话主循环会拿到空串，一直 continue，菜单无限刷屏。
+    if ($null -eq $raw) { $script:Eof = $true; return '' }
+    return $raw.Trim().ToLower()
 }
 
 function Read-Text([string]$Prompt, [string]$Default = '') {
@@ -1212,6 +1217,11 @@ if ($Item) {
 while ($true) {
     Show-Menu
     $k = Read-Key '请输入'
+    if ($script:Eof) {
+        Write-Host ''
+        Write-Host '  输入结束，退出。' -ForegroundColor Gray
+        break
+    }
     if ($k -eq '') { continue }
     Invoke-MenuItem $k
     Pause-Menu
