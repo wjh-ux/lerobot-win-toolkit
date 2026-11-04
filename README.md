@@ -126,7 +126,7 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
     [g] GPU 与 NVIDIA 驱动   ← 装驱动、切换 CPU/CUDA
 
    机械臂准备（按顺序做一次）
-    [2] 查找串口    [3] 设置电机 ID    [4] 标定机械臂
+    [2] 查找串口    [3] 设置电机 ID    [4] 标定机械臂    [r] 校准管理
 
    日常使用
     [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放
@@ -137,6 +137,37 @@ chmod +x lerobot-menu.sh install-lerobot.sh test-lerobot.sh
 
 也可以直达：`./lerobot-menu.sh g`（GPU 面板）、`./lerobot-menu.sh 4`（标定）。
 加 `--dry-run` 时所有安装类操作只打印命令。
+
+### 校准管理（`[r]`）
+
+标定不好（抖动、漂移、行程不对）时不必重装环境，删掉校准文件重新标一次就行。
+Linux 和 Windows 的菜单里都是 `[r]`：
+
+```
+现有校准文件：
+  [1] robots\so101_follower\my_follower_arm.json       27 B  2026-11-04 12:58
+  [2] teleoperators\so101_leader\my_leader_arm.json     27 B  2026-11-04 12:58
+
+  [1] 删除全部（整个目录改名为 .bak-时间戳，可还原）
+  [2] 只删指定的一个
+  [3] 只备份不删
+  [4] 删除后接着重新标定
+```
+
+**删除前一律先备份**，"删除全部"是把整个目录改名成 `calibration.bak-20261104-125909`，
+想还原就把名字改回去。
+
+路径与 lerobot 源码一致，并且跟着环境变量走：
+
+| 优先级 | 环境变量 | 实际目录 |
+|---|---|---|
+| 1 | `HF_LEROBOT_CALIBRATION` | 直接用它 |
+| 2 | `HF_LEROBOT_HOME` | `$HF_LEROBOT_HOME/calibration` |
+| 3 | `HF_HOME` | `$HF_HOME/lerobot/calibration` |
+| 4 | — | `~/.cache/huggingface/lerobot/calibration` |
+
+文件结构是 `calibration/robots/<机型>/<id>.json` 和
+`calibration/teleoperators/<机型>/<id>.json`——标定 id 就是文件名，所以**换 id 等于换一份标定**。
 
 ### GPU 驱动管理（`[g]`）
 
@@ -279,6 +310,7 @@ powershell -ExecutionPolicy Bypass -File .\lerobot-menu.ps1
     [2] 查找串口              lerobot-find-port
     [3] 设置电机 ID           lerobot-setup-motors
     [4] 标定机械臂            lerobot-calibrate
+[r] 校准管理（删除/重标定）
 
    日常使用
     [5] 遥操作                lerobot-teleoperate

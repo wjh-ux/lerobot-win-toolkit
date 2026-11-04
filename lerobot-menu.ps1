@@ -207,11 +207,23 @@ function Invoke-Lerobot {
     else { Write-Host "  命令退出码 $code（0 才是正常）" -ForegroundColor Yellow }
 }
 
-function Get-CalibrationList {
-    $dir = Join-Path $HOME '.cache\huggingface\lerobot\calibration'
+function Get-CalibrationRoot {
+    # 与 lerobot 源码一致：HF_LEROBOT_CALIBRATION > HF_LEROBOT_HOME/calibration
+    #                     > HF_HOME/lerobot/calibration > ~/.cache/huggingface/lerobot/calibration
+    if ($env:HF_LEROBOT_CALIBRATION) { return $env:HF_LEROBOT_CALIBRATION }
+    if ($env:HF_LEROBOT_HOME) { return (Join-Path $env:HF_LEROBOT_HOME 'calibration') }
+    if ($env:HF_HOME) { return (Join-Path (Join-Path $env:HF_HOME 'lerobot') 'calibration') }
+    return (Join-Path $HOME '.cache\huggingface\lerobot\calibration')
+}
+
+function Get-CalibrationFiles {
+    $dir = Get-CalibrationRoot
     if (-not (Test-Path $dir)) { return @() }
-    return @(Get-ChildItem $dir -Recurse -Filter *.json -ErrorAction SilentlyContinue |
-             ForEach-Object { $_.BaseName } | Select-Object -Unique)
+    return @(Get-ChildItem $dir -Recurse -Filter *.json -File -ErrorAction SilentlyContinue | Sort-Object FullName)
+}
+
+function Get-CalibrationList {
+    return @(Get-CalibrationFiles | ForEach-Object { $_.BaseName } | Select-Object -Unique)
 }
 
 function Select-RobotId([string]$Kind = 'robot', [string]$Default = '') {
@@ -258,6 +270,7 @@ function Show-Menu {
     Write-Host '    [2] 查找串口              lerobot-find-port' -ForegroundColor White
     Write-Host '    [3] 设置电机 ID           lerobot-setup-motors' -ForegroundColor White
     Write-Host '    [4] 标定机械臂            lerobot-calibrate' -ForegroundColor White
+    Write-Host '    [r] 校准管理（删除/重标定）' -ForegroundColor White
     Write-Host ''
     Write-Host '   日常使用' -ForegroundColor DarkGray
     Write-Host '    [5] 遥操作                lerobot-teleoperate' -ForegroundColor White
@@ -339,6 +352,87 @@ function Action-Calibrate {
     Write-Host ''
     Write-Host '  标定步骤：1) 把各关节摆到行程中间 2) 回车 3) 每个关节走完整行程' -ForegroundColor Yellow
     Invoke-Lerobot 'lerobot-calibrate' @("--$side.type=$type", "--$side.port=$port", "--$side.id=$id")
+}
+
+# 标定不好（抖动、漂移、动作范围不对）时，删掉校准文件重来
+function Action-CalibrationManager {
+    $root = Get-CalibrationRoot
+    Write-Host ''
+    Write-Host '=== 校准管理 ===' -ForegroundColor Cyan
+    Write-Host "  校准目录：$root" -ForegroundColor DarkGray
+    if ($env:HF_LEROBOT_CALIBRATION) { Write-Host '  （来自 HF_LEROBOT_CALIBRATION）' -ForegroundColor DarkGray }
+    elseif ($env:HF_LEROBOT_HOME)    { Write-Host '  （来自 HF_LEROBOT_HOME）' -ForegroundColor DarkGray }
+    elseif ($env:HF_HOME)            { Write-Host '  （来自 HF_HOME）' -ForegroundColor DarkGray }
+    Write-Host ''
+
+    $files = @(Get-CalibrationFiles)
+    if ($files.Count -eq 0) {
+        Write-Host '  还没有校准文件' -ForegroundColor Yellow
+        Write-Host '  接上机械臂后用 [4] 标定' -ForegroundColor Gray
+        return
+    }
+
+    Write-Host '  现有校准文件：' -ForegroundColor White
+    for ($i = 0; $i -lt $files.Count; $i++) {
+        $rel = $files[$i].FullName.Substring($root.Length).TrimStart('\', '/')
+        Write-Host ("    [{0}] {1,-44} {2,6} B  {3}" -f ($i + 1), $rel, $files[$i].Length,
+                                                  $files[$i].LastWriteTime.ToString('yyyy-MM-dd HH:mm'))
+    }
+
+    Write-Host ''
+    Write-Host '  校准不好就删掉重来。' -ForegroundColor Gray
+    Write-Host '    [1] 删除全部（整个目录改名为 .bak-时间戳，可还原）' -ForegroundColor White
+    Write-Host '    [2] 只删指定的一个' -ForegroundColor White
+    Write-Host '    [3] 只备份不删' -ForegroundColor White
+    Write-Host '    [4] 删除后接着重新标定' -ForegroundColor White
+    Write-Host '    [0] 返回' -ForegroundColor White
+
+    $k = Read-Text '选择' '0'
+    $bak = "$root.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+
+    switch ($k) {
+        '1' {
+            Write-Host ''
+            Write-Host '  整个校准目录会被改名成备份，效果等于清空。' -ForegroundColor Yellow
+            if ((Read-Text '确认删除全部校准？(y/N)' 'n') -notmatch '^[yY]') { Write-Host '  已取消' -ForegroundColor Gray; return }
+            try {
+                Move-Item -LiteralPath $root -Destination $bak -ErrorAction Stop
+                Write-Host "  已备份并清空：$bak" -ForegroundColor Green
+                Write-Host "  要还原就把该目录改回 $root" -ForegroundColor Gray
+                Write-Host '  接下来用 [4] 重新标定' -ForegroundColor Gray
+            } catch { Write-Host "  操作失败：$($_.Exception.Message)" -ForegroundColor Red }
+        }
+        '2' {
+            $pick = Read-Text '要删第几个' '1'
+            $idx = 0
+            if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $files.Count) {
+                Write-Host '  序号不对' -ForegroundColor Yellow; return
+            }
+            $target = $files[$idx - 1]
+            Write-Host ''
+            Write-Host ("  将要删除：" + $target.FullName.Substring($root.Length).TrimStart('\', '/')) -ForegroundColor Yellow
+            if ((Read-Text '确认删除？(y/N)' 'n') -notmatch '^[yY]') { Write-Host '  已取消' -ForegroundColor Gray; return }
+            try {
+                Remove-Item -LiteralPath $target.FullName -Force -ErrorAction Stop
+                Write-Host '  已删除，可用 [4] 重新标定' -ForegroundColor Green
+            } catch { Write-Host "  删除失败：$($_.Exception.Message)" -ForegroundColor Red }
+        }
+        '3' {
+            try {
+                Copy-Item -LiteralPath $root -Destination $bak -Recurse -Force -ErrorAction Stop
+                Write-Host "  已备份到：$bak" -ForegroundColor Green
+            } catch { Write-Host "  备份失败：$($_.Exception.Message)" -ForegroundColor Red }
+        }
+        '4' {
+            if ((Read-Text '删除全部并重新标定？(y/N)' 'n') -notmatch '^[yY]') { Write-Host '  已取消' -ForegroundColor Gray; return }
+            try {
+                Move-Item -LiteralPath $root -Destination $bak -ErrorAction Stop
+                Write-Host "  已备份并清空：$bak" -ForegroundColor Green
+                Action-Calibrate
+            } catch { Write-Host "  操作失败：$($_.Exception.Message)" -ForegroundColor Red }
+        }
+        default { return }
+    }
 }
 
 function Action-Teleoperate {
@@ -528,7 +622,7 @@ for n in ["torch","torchvision","numpy","opencv-python-headless","feetech-servo-
     if ($cals.Count -eq 0) {
         Write-Host '    （还没有，跑 [4] 标定）' -ForegroundColor Gray
     } else {
-        $dir = Join-Path $HOME '.cache\huggingface\lerobot\calibration'
+        $dir = Get-CalibrationRoot
         Get-ChildItem $dir -Recurse -Filter *.json | ForEach-Object {
             Write-Host ("    {0}" -f $_.FullName) -ForegroundColor White
         }
@@ -602,6 +696,7 @@ function Invoke-MenuItem([string]$key) {
         '2' { Action-FindPort }
         '3' { Action-SetupMotors }
         '4' { Action-Calibrate }
+        'r' { Action-CalibrationManager }
         '5' { Action-Teleoperate }
         '6' { Action-Record }
         '7' { Action-Train }

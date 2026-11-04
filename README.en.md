@@ -107,6 +107,7 @@ lerobot.bat
     [2] Find serial port        lerobot-find-port
     [3] Set motor IDs           lerobot-setup-motors
     [4] Calibrate arm           lerobot-calibrate
+[r] Calibration manager (delete / re-calibrate)
 
    Daily use
     [5] Teleoperate             lerobot-teleoperate

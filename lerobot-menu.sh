@@ -491,6 +491,107 @@ action_calibrate() {
     lerobot_cmd lerobot-calibrate "--${side}.type=${type}" "--${side}.port=${port}" "--${side}.id=${id}"
 }
 
+# ---------------------------------------------------------------- 校准文件管理
+# 路径来自 lerobot 源码：calibration/robots/<机型>/<id>.json
+#                        calibration/teleoperators/<机型>/<id>.json
+# 根目录可以被三个环境变量覆盖，必须跟着走，否则删了个空目录还以为成功了。
+calib_root() {
+    if [ -n "${HF_LEROBOT_CALIBRATION:-}" ]; then
+        printf '%s' "$HF_LEROBOT_CALIBRATION"
+    elif [ -n "${HF_LEROBOT_HOME:-}" ]; then
+        printf '%s/calibration' "$HF_LEROBOT_HOME"
+    elif [ -n "${HF_HOME:-}" ]; then
+        printf '%s/lerobot/calibration' "$HF_HOME"
+    else
+        printf '%s/.cache/huggingface/lerobot/calibration' "$HOME"
+    fi
+}
+
+calib_list() {
+    local root; root=$(calib_root)
+    [ -d "$root" ] || return 0
+    find "$root" -type f -name '*.json' 2>/dev/null | sort
+}
+
+action_calibration() {
+    local root; root=$(calib_root)
+    section "校准管理"
+    info "校准目录: $root"
+    [ -n "${HF_LEROBOT_CALIBRATION:-}" ] && info "（来自 HF_LEROBOT_CALIBRATION）"
+    [ -z "${HF_LEROBOT_CALIBRATION:-}" ] && [ -n "${HF_LEROBOT_HOME:-}" ] && info "（来自 HF_LEROBOT_HOME）"
+    [ -z "${HF_LEROBOT_CALIBRATION:-}" ] && [ -z "${HF_LEROBOT_HOME:-}" ] && [ -n "${HF_HOME:-}" ] && info "（来自 HF_HOME）"
+    echo
+
+    local files; files=$(calib_list)
+    if [ -z "$files" ]; then
+        warn "还没有校准文件"
+        info "接上机械臂后用 [4] 标定"
+        return
+    fi
+
+    printf '  现有校准文件：\n'
+    local n=0
+    while IFS= read -r f; do
+        n=$((n+1))
+        local rel size mt
+        rel=${f#"$root"/}
+        size=$(stat -c %s "$f" 2>/dev/null || echo "?")
+        mt=$(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "?")
+        printf '    [%d] %-46s %5s B  %s\n' "$n" "$rel" "$size" "$mt"
+    done <<< "$files"
+
+    printf '\n  校准不好（抖动、漂移、动作范围不对）就删掉重来。\n'
+    printf '    [1] 删除全部（整个目录改名为 .bak-时间戳，可还原）\n'
+    printf '    [2] 只删指定的一个\n'
+    printf '    [3] 只备份不删\n'
+    printf '    [4] 删除后接着重新标定\n'
+    printf '    [0] 返回\n'
+
+    local k; k=$(ask "选择" "0")
+    local bak; bak="${root}.bak-$(date +%Y%m%d-%H%M%S)"
+
+    case "$k" in
+        1)
+            printf '\n  %s整个校准目录会被改名成备份，效果等于清空。%s\n' "$C_Y" "$C_0"
+            confirm "确认删除全部校准？" || { info "已取消"; return; }
+            if mv "$root" "$bak"; then
+                ok "已备份并清空：$bak"
+                info "要还原就把该目录改回 ${root}"
+                info "接下来用 [4] 重新标定"
+            else
+                err "操作失败（权限？目录被占用？）"
+            fi
+            ;;
+        2)
+            local pick; pick=$(ask "要删第几个" "1")
+            local target
+            target=$(printf '%s\n' "$files" | sed -n "${pick}p")
+            [ -z "$target" ] && { warn "没有第 $pick 项"; return; }
+            printf '\n  将要删除：%s\n' "${target#"$root"/}"
+            confirm "确认删除？" || { info "已取消"; return; }
+            if rm -f "$target"; then ok "已删除，可用 [4] 重新标定"; else err "删除失败"; fi
+            ;;
+        3)
+            if cp -a "$root" "$bak"; then
+                ok "已备份到：$bak"
+            else
+                err "备份失败"
+            fi
+            ;;
+        4)
+            confirm "删除全部并重新标定？" || { info "已取消"; return; }
+            if mv "$root" "$bak"; then
+                ok "已备份并清空：$bak"
+                action_calibrate
+            else
+                err "操作失败"
+            fi
+            ;;
+        0|"") return ;;
+        *) warn "没有这个选项" ;;
+    esac
+}
+
 action_teleoperate() {
     local fport lport fid lid
     fport=$(pick_port); [ -z "$fport" ] && return
@@ -570,7 +671,7 @@ action_info() {
     section "GPU"
     action_gpu_detect
     section "标定文件"
-    local cal="${HOME}/.cache/huggingface/lerobot/calibration"
+    local cal; cal=$(calib_root)
     if [ -d "$cal" ]; then find "$cal" -name '*.json' 2>/dev/null | sed 's/^/    /' || true
     else info "还没有标定过"; fi
     section "HuggingFace"
@@ -627,7 +728,7 @@ show_menu() {
     printf '\n   机械臂准备（按顺序做一次）\n'
     printf '    [2] 查找串口\n'
     printf '    [3] 设置电机 ID\n'
-    printf '    [4] 标定机械臂\n'
+    printf '    [4] 标定机械臂    [r] 校准管理（删除/重标定）\n'
     printf '\n   日常使用\n'
     printf '    [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放\n'
     printf '\n   其他\n'
@@ -643,6 +744,7 @@ dispatch() {
         2) action_find_port ;;
         3) action_setup_motors ;;
         4) action_calibrate ;;
+        r|R) action_calibration ;;
         5) action_teleoperate ;;
         6) action_record ;;
         7) action_train ;;
