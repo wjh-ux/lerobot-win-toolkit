@@ -271,7 +271,8 @@ function Show-Menu {
     Write-Host '    [3] 设置电机 ID           lerobot-setup-motors' -ForegroundColor White
     Write-Host '    [4] 标定机械臂            lerobot-calibrate' -ForegroundColor White
     Write-Host '    [r] 校准管理（删除/重标定）' -ForegroundColor White
-    Write-Host '    [s] 舵机调试工具（Seeed 图形界面，查 ID/中位/单测）' -ForegroundColor White
+    Write-Host '    [s] 安装 / 更新舵机调试工具（Seeed 图形界面）' -ForegroundColor White
+    Write-Host '    [o] 打开舵机调试工具' -ForegroundColor White
     Write-Host ''
     Write-Host '   日常使用' -ForegroundColor DarkGray
     Write-Host '    [5] 遥操作                lerobot-teleoperate' -ForegroundColor White
@@ -800,6 +801,33 @@ function Remove-ServoTool {
     } catch { Write-Host "  删除失败：$($_.Exception.Message)" -ForegroundColor Red }
 }
 
+# 主菜单直达：安装
+function Action-ServoInstall {
+    Install-ServoTool
+    if (Test-ServoToolInstalled) {
+        Write-Host ''
+        if ((Read-Text '装好了，现在打开图形界面？(y/N)' 'n') -match '^[yY]') {
+            Start-ServoTool
+        } else {
+            Write-Host '  以后用主菜单 [o] 打开' -ForegroundColor Gray
+        }
+    }
+}
+
+# 主菜单直达：打开（没装就先问要不要装）
+function Action-ServoOpen {
+    Write-Host ''
+    Write-Host '=== 舵机调试工具 ===' -ForegroundColor Cyan
+    if (-not (Test-ServoToolInstalled)) {
+        Write-Host '  还没安装' -ForegroundColor Yellow
+        if ((Read-Text '现在安装？(y/N)' 'n') -match '^[yY]') {
+            Install-ServoTool
+            if (-not (Test-ServoToolInstalled)) { return }
+        } else { return }
+    }
+    Start-ServoTool
+}
+
 function Action-ServoTool {
     while ($true) {
         Clear-Host
@@ -864,6 +892,7 @@ function Action-Advanced {
         Write-Host '    [8] lerobot-train-tokenizer   训练 VLA tokenizer' -ForegroundColor White
         Write-Host '    [9] lerobot-setup-can         Damiao CAN 总线初始化' -ForegroundColor White
         Write-Host ''
+        Write-Host '    [s] 舵机工具：环境检查 / 卸载 / 说明' -ForegroundColor White
         Write-Host '    [c] 任意命令（自己敲参数）' -ForegroundColor White
         Write-Host '    [0] 返回' -ForegroundColor White
         Write-Host ''
@@ -918,6 +947,10 @@ function Action-Advanced {
             '9' {
                 Write-Host '  Damiao 电机走 CAN 总线（OpenArm 等），需要先配置 can 接口' -ForegroundColor Gray
                 Invoke-Lerobot 'lerobot-setup-can' @('--help')
+            }
+            's' {
+                Action-ServoTool
+                break
             }
             'c' {
                 if (-not (Assert-Env)) { break }
@@ -980,7 +1013,8 @@ function Invoke-MenuItem([string]$key) {
         '3' { Action-SetupMotors }
         '4' { Action-Calibrate }
         'r' { Action-CalibrationManager }
-        's' { Action-ServoTool; return }
+        's' { Action-ServoInstall }
+        'o' { Action-ServoOpen }
         '5' { Action-Teleoperate }
         '6' { Action-Record }
         '7' { Action-Train }

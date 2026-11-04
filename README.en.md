@@ -108,7 +108,8 @@ lerobot.bat
     [3] Set motor IDs           lerobot-setup-motors
     [4] Calibrate arm           lerobot-calibrate
 [r] Calibration manager (delete / re-calibrate)
-[s] Servo debug tool (Seeed GUI: IDs / center / single-servo test)
+[s] Install / update the servo debug tool (Seeed GUI)
+[o] Open the servo debug tool
 [t] Open a LeRobot terminal (env activated)
 [x] Advanced: the remaining 8 commands
 

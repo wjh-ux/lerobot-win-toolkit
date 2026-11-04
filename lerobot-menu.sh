@@ -840,6 +840,33 @@ servo_tool_uninstall() {
     if rm -rf "$SERVO_TOOL_DIR"; then ok "已删除"; else err "删除失败"; fi
 }
 
+# 主菜单直达：安装
+action_servo_install() {
+    servo_tool_install
+    if servo_tool_installed; then
+        echo
+        if confirm "装好了，现在打开图形界面？"; then
+            servo_tool_launch
+        else
+            info "以后用主菜单 [o] 打开"
+        fi
+    fi
+}
+
+# 主菜单直达：打开（没装就先问要不要装）
+action_servo_open() {
+    section "舵机调试工具"
+    if ! servo_tool_installed; then
+        warn "还没安装"
+        if confirm "现在安装？"; then
+            servo_tool_install || return 1
+        else
+            return 1
+        fi
+    fi
+    servo_tool_launch
+}
+
 action_servo_tool() {
     while true; do
         clear 2>/dev/null || true
@@ -897,7 +924,8 @@ action_advanced() {
         printf '    [7] lerobot-edit-dataset      数据集编辑（删回合/合并/改特征）\n'
         printf '    [8] lerobot-train-tokenizer   训练 VLA tokenizer\n'
         printf '    [9] lerobot-setup-can         Damiao CAN 总线初始化\n'
-        printf '\n    [c] 任意命令（自己敲参数）\n'
+        printf '\n    [s] 舵机工具：环境检查 / 卸载 / 说明\n'
+        printf '    [c] 任意命令（自己敲参数）\n'
         printf '    [0] 返回\n\n'
 
         local k; k=$(ask "请输入")
@@ -949,6 +977,10 @@ action_advanced() {
             9)
                 info "Damiao 电机走 CAN 总线（OpenArm 等），需要先配置 can 接口"
                 lerobot_cmd lerobot-setup-can --help
+                ;;
+            s|S)
+                action_servo_tool
+                continue
                 ;;
             c|C)
                 need_env || { pause_menu; continue; }
@@ -1018,7 +1050,8 @@ show_menu() {
     printf '    [2] 查找串口\n'
     printf '    [3] 设置电机 ID\n'
     printf '    [4] 标定机械臂    [r] 校准管理（删除/重标定）\n'
-    printf '    [s] 舵机调试工具（Seeed 图形界面，查 ID/中位/单测）\n'
+    printf '    [s] 安装 / 更新舵机调试工具（Seeed 图形界面）\n'
+    printf '    [o] 打开舵机调试工具\n'
     printf '\n   日常使用\n'
     printf '    [5] 遥操作    [6] 录制    [7] 训练    [8] 推理    [9] 回放\n'
     printf '\n   其他\n'
@@ -1037,7 +1070,8 @@ dispatch() {
         3) action_setup_motors ;;
         4) action_calibrate ;;
         r|R) action_calibration ;;
-        s|S) action_servo_tool; return ;;
+        s|S) action_servo_install ;;
+        o|O) action_servo_open ;;
         5) action_teleoperate ;;
         6) action_record ;;
         7) action_train ;;
